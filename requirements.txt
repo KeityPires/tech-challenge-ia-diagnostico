@@ -1,13 +1,29 @@
-pandas
-numpy
-matplotlib
-seaborn
-scikit-learn
-imbalanced-learn
-joblib
-jupyter
-shap
-pyyaml
+# ========================================
+# Tech Challenge - Diagnóstico de Câncer de Mama
+# Pós-Tech FIAP - IA para Devs
+# Ambiente Python 3.10
+# ========================================
+
+# Manipulação e Análise de Dados
+pandas==2.2.2
+numpy==1.26.4
+
+# Visualização de Dados
+matplotlib==3.8.4
+seaborn==0.13.2
+
+# Machine Learning e Pré-processamento
+scikit-learn==1.5.1
+imbalanced-learn==0.12.3
+joblib==1.4.2
+
+# Explicabilidade e Interpretação
+shap==0.46.0
+pyyaml==6.0.2
+
+# Ambiente de Notebooks
+jupyter==1.0.0
+ipykernel==6.29.3
 
 
 
