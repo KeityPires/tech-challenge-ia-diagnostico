@@ -55,18 +55,14 @@ def analisar_correlacao(df, target='diagnosis', top_n=10):
     """
     Calcula a correlação entre as variáveis e o target e plota a matriz
     das variáveis mais correlacionadas.
-
-    Parâmetros
-    ----------
+    Parâmetros:
     df : pandas.DataFrame
         DataFrame com os dados já tratados (sem colunas não numéricas).
     target : str, opcional
         Nome da variável alvo (default='diagnosis').
     top_n : int, opcional
         Número de variáveis mais correlacionadas a exibir (default=10).
-
-    Retorna
-    -------
+    Retorna:    
     corr_with_target : pandas.Series
         Correlação de cada variável com o target.
     """
