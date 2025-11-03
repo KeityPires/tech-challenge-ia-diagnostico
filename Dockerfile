@@ -12,4 +12,4 @@ RUN pip install --upgrade pip \
 
 EXPOSE 8888
 
-CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--allow-root", "--NotebookApp.token=", "--NotebookApp.password="]
+CMD ["sh", "-c", "jupyter notebook --ip=0.0.0.0 --port=8888 --allow-root --NotebookApp.token='' --NotebookApp.password='' --no-browser --NotebookApp.disable_check_xsrf=True"]
