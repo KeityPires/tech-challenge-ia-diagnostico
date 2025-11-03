@@ -7,10 +7,9 @@ COPY src ./src
 COPY notebooks ./notebooks
 COPY data ./data
 
-RUN pip install --no-cache-dir -r requirements.txt
-
-RUN pip install jupyter
+RUN pip install --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt jupyter
 
 EXPOSE 8888
 
-CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--allow-root", "--NotebookApp.token=''", "--NotebookApp.password=''"]
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--allow-root", "--NotebookApp.token=", "--NotebookApp.password="]
