@@ -26,4 +26,5 @@ jupyter==1.0.0
 ipykernel==6.29.3
 
 
-
+# Algoritmo Genético
+deap
