@@ -1,203 +1,222 @@
+from __future__ import annotations
+
+import random
+import logging
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Optional
+
+import numpy as np
+import pandas as pd
+
 from sklearn.tree import DecisionTreeClassifier
-
-TREE_SPACE = {
-    "max_depth": (2, 20),            
-    "min_samples_split": (2, 20),     
-    "min_samples_leaf": (1, 10),      
-    "criterion": ["gini", "entropy"], 
-}
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 
-def _decode_tree_individual(individual: List[int]) -> Dict[str, Any]:
-   
-    max_depth_gene = int(individual[0])
-    max_depth = None if max_depth_gene == 0 else max_depth_gene
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
 
-    min_samples_split = int(individual[1])
-    min_samples_leaf = int(individual[2])
-    criterion = TREE_SPACE["criterion"][int(individual[3])]
+
+@dataclass
+class GAConfigTree:
+    population_size: int = 20
+    n_generations: int = 10
+    mut_prob: float = 0.10
+    cx_prob: float = 0.70
+    tournament_k: int = 3
+    cv_folds: int = 5
+    random_state: int = 42
+
+    # Pesos para a função fitness (ajuste conforme seu foco clínico)
+    # Em saúde, muitas vezes o recall (sensibilidade) é mais importante.
+    w_recall: float = 0.50
+    w_f1: float = 0.40
+    w_acc: float = 0.10
+
+
+def _random_individual(rng: random.Random) -> Dict[str, Any]:
+    """
+    Cria um indivíduo (um conjunto de hiperparâmetros da árvore).
+    Genes escolhidos para serem "otimizáveis" e comuns em tuning.
+    """
+    max_depth = rng.choice([None, 2, 3, 4, 5, 6, 8, 10])
+    min_samples_split = rng.choice([2, 3, 4, 5, 6, 8, 10])
+    min_samples_leaf = rng.choice([1, 2, 3, 4, 5])
+    criterion = rng.choice(["gini", "entropy", "log_loss"])
+    splitter = rng.choice(["best", "random"])
+
+    # max_features pode melhorar generalização (reduzir overfitting).
+    max_features = rng.choice([None, "sqrt", "log2"])
 
     return {
         "max_depth": max_depth,
         "min_samples_split": min_samples_split,
         "min_samples_leaf": min_samples_leaf,
         "criterion": criterion,
-        "random_state": 42
+        "splitter": splitter,
+        "max_features": max_features,
     }
 
 
-def _evaluate_tree_fitness(
-    individual: List[int],
-    X: np.ndarray,
-    y: np.ndarray,
-    config: GAConfig,
-) -> Tuple[float]:
-    params = _decode_tree_individual(individual)
-    model = DecisionTreeClassifier(**params)
-
-    cv = StratifiedKFold(
-        n_splits=config.cv_folds,
-        shuffle=True,
-        random_state=config.random_state,
+def _build_model(params: Dict[str, Any], random_state: int) -> DecisionTreeClassifier:
+    return DecisionTreeClassifier(
+        random_state=random_state,
+        **params
     )
 
-    scoring = {"acc": "accuracy", "recall": "recall", "f1": "f1"}
-    scores = cross_validate(model, X, y, cv=cv, scoring=scoring, n_jobs=-1)
 
-    acc = float(np.mean(scores["test_acc"]))
-    rec = float(np.mean(scores["test_recall"]))
-    f1 = float(np.mean(scores["test_f1"]))
+def _fitness(
+    X_train,
+    y_train,
+    params: Dict[str, Any],
+    config: GAConfigTree
+) -> float:
+    """
+    Calcula fitness baseado em validação cruzada estratificada no TREINO.
+    Fitness = combinação ponderada de recall + f1 + accuracy.
+    """
+    model = _build_model(params, random_state=config.random_state)
+    cv = StratifiedKFold(n_splits=config.cv_folds, shuffle=True, random_state=config.random_state)
 
-    fitness = (config.w_recall * rec) + (config.w_f1 * f1) + (config.w_acc * acc)
-    return (fitness,)
+    # cross_val_score retorna média do score por fold
+    acc = cross_val_score(model, X_train, y_train, cv=cv, scoring="accuracy").mean()
+    rec = cross_val_score(model, X_train, y_train, cv=cv, scoring="recall").mean()
+    f1 = cross_val_score(model, X_train, y_train, cv=cv, scoring="f1").mean()
 
-
-def _mutate_tree_individual(individual: List[int], indpb: float = 0.2) -> Tuple[List[int]]:
-    
-    # gene 0: max_depth_gene (0 ou 2..20)
-    if random.random() < indpb:
-        # 20% chance de virar None (0), senão vira um depth válido
-        if random.random() < 0.2:
-            individual[0] = 0
-        else:
-            low, high = TREE_SPACE["max_depth"]
-            individual[0] = random.randint(low, high)
-
-    # gene 1: min_samples_split
-    if random.random() < indpb:
-        low, high = TREE_SPACE["min_samples_split"]
-        individual[1] = random.randint(low, high)
-
-    # gene 2: min_samples_leaf
-    if random.random() < indpb:
-        low, high = TREE_SPACE["min_samples_leaf"]
-        individual[2] = random.randint(low, high)
-
-    # gene 3: criterion_idx
-    if random.random() < indpb:
-        individual[3] = random.randrange(len(TREE_SPACE["criterion"]))
-
-    return (individual,)
+    return (config.w_recall * rec) + (config.w_f1 * f1) + (config.w_acc * acc)
 
 
-def optimize_decision_tree_with_ga(
-    X: np.ndarray,
-    y: np.ndarray,
-    config: Optional[GAConfig] = None,
+def _tournament_selection(population: List[Dict[str, Any]], fitnesses: List[float], rng: random.Random, k: int) -> Dict[str, Any]:
+    """
+    Seleciona 1 indivíduo por torneio:
+    escolhe k aleatórios e retorna o com maior fitness.
+    """
+    idxs = rng.sample(range(len(population)), k)
+    best_idx = max(idxs, key=lambda i: fitnesses[i])
+    return population[best_idx].copy()
+
+
+def _crossover(p1: Dict[str, Any], p2: Dict[str, Any], rng: random.Random) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Crossover simples: para cada gene, troca com 50% de chance.
+    """
+    c1, c2 = p1.copy(), p2.copy()
+    for key in c1.keys():
+        if rng.random() < 0.5:
+            c1[key], c2[key] = c2[key], c1[key]
+    return c1, c2
+
+
+def _mutate(ind: Dict[str, Any], rng: random.Random, mut_prob: float) -> Dict[str, Any]:
+    """
+    Mutação: com probabilidade mut_prob, altera um ou mais genes.
+    """
+    new_ind = ind.copy()
+
+    def maybe_mutate_gene(key: str, options: List[Any]):
+        if rng.random() < mut_prob:
+            new_ind[key] = rng.choice(options)
+
+    maybe_mutate_gene("max_depth", [None, 2, 3, 4, 5, 6, 8, 10])
+    maybe_mutate_gene("min_samples_split", [2, 3, 4, 5, 6, 8, 10])
+    maybe_mutate_gene("min_samples_leaf", [1, 2, 3, 4, 5])
+    maybe_mutate_gene("criterion", ["gini", "entropy", "log_loss"])
+    maybe_mutate_gene("splitter", ["best", "random"])
+    maybe_mutate_gene("max_features", [None, "sqrt", "log2"])
+
+    return new_ind
+
+
+def optimize_tree_with_ga(
+    X_train,
+    y_train,
+    config: Optional[GAConfigTree] = None
 ) -> Tuple[DecisionTreeClassifier, Dict[str, Any], pd.DataFrame]:
-    
+    """
+    Executa o AG para encontrar os melhores hiperparâmetros da Decision Tree.
+
+    Retorna:
+    - best_model: modelo treinado com melhores hiperparâmetros no treino completo
+    - best_params: dicionário com hiperparâmetros vencedores
+    - history: DataFrame com estatísticas por geração (min/avg/max + best_*)
+    """
     if config is None:
-        config = GAConfig()
+        config = GAConfigTree()
 
-    random.seed(config.random_state)
-    np.random.seed(config.random_state)
+    rng = random.Random(config.random_state)
 
-    # Criadores DEAP (evita erro se reexecutar no notebook)
-    if not hasattr(creator, "FitnessMax"):
-        creator.create("FitnessMax", base.Fitness, weights=(1.0,))
-    if not hasattr(creator, "Individual"):
-        creator.create("Individual", list, fitness=creator.FitnessMax)
-
-    toolbox = base.Toolbox()
-
-    # geradores de genes
-    def gene_max_depth():
-        # 20% chance de None (0)
-        if random.random() < 0.2:
-            return 0
-        low, high = TREE_SPACE["max_depth"]
-        return random.randint(low, high)
-
-    def gene_min_samples_split():
-        low, high = TREE_SPACE["min_samples_split"]
-        return random.randint(low, high)
-
-    def gene_min_samples_leaf():
-        low, high = TREE_SPACE["min_samples_leaf"]
-        return random.randint(low, high)
-
-    def gene_criterion_idx():
-        return random.randrange(len(TREE_SPACE["criterion"]))
-
-    # indivíduo: [max_depth_gene, min_samples_split, min_samples_leaf, criterion_idx]
-    toolbox.register(
-        "individual",
-        tools.initCycle,
-        creator.Individual,
-        (gene_max_depth, gene_min_samples_split, gene_min_samples_leaf, gene_criterion_idx),
-        n=1,
-    )
-    toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-
-    toolbox.register("evaluate", _evaluate_tree_fitness, X=X, y=y, config=config)
-    toolbox.register("select", tools.selTournament, tournsize=config.tournament_size)
-    toolbox.register("mate", tools.cxUniform, indpb=0.5)
-    toolbox.register("mutate", _mutate_tree_individual, indpb=0.2)
-
-    pop = toolbox.population(n=config.population_size)
-
-    stats = tools.Statistics(lambda ind: ind.fitness.values[0])
-    stats.register("min", np.min)
-    stats.register("avg", np.mean)
-    stats.register("max", np.max)
+    # 1) Inicializa população
+    population = [_random_individual(rng) for _ in range(config.population_size)]
 
     history_rows = []
+    best_params: Dict[str, Any] = {}
+    best_fit = -np.inf
 
-    # avalia população inicial
-    invalid = [ind for ind in pop if not ind.fitness.valid]
-    fitnesses = list(map(toolbox.evaluate, invalid))
-    for ind, fit in zip(invalid, fitnesses):
-        ind.fitness.values = fit
-
+    # 2) Evolui por gerações
     for gen in range(1, config.n_generations + 1):
-        offspring = toolbox.select(pop, len(pop))
-        offspring = list(map(toolbox.clone, offspring))
+        fitnesses = [
+            _fitness(X_train, y_train, ind, config)
+            for ind in population
+        ]
 
-        # crossover
-        for c1, c2 in zip(offspring[0::2], offspring[1::2]):
-            if random.random() < config.cx_prob:
-                toolbox.mate(c1, c2)
-                del c1.fitness.values
-                del c2.fitness.values
+        gen_min = float(np.min(fitnesses))
+        gen_avg = float(np.mean(fitnesses))
+        gen_max = float(np.max(fitnesses))
 
-        # mutation
-        for mutant in offspring:
-            if random.random() < config.mut_prob:
-                toolbox.mutate(mutant)
-                del mutant.fitness.values
+        # Melhor da geração
+        best_idx = int(np.argmax(fitnesses))
+        gen_best_ind = population[best_idx].copy()
+        gen_best_fit = fitnesses[best_idx]
 
-        # reavalia
-        invalid = [ind for ind in offspring if not ind.fitness.valid]
-        fitnesses = list(map(toolbox.evaluate, invalid))
-        for ind, fit in zip(invalid, fitnesses):
-            ind.fitness.values = fit
+        # Melhor global
+        if gen_best_fit > best_fit:
+            best_fit = gen_best_fit
+            best_params = gen_best_ind.copy()
 
-        pop[:] = offspring
-
-        record = stats.compile(pop)
-        best_ind = tools.selBest(pop, 1)[0]
-        best_params = _decode_tree_individual(best_ind)
+        logger.info(
+            f"Gen {gen} | min={gen_min:.4f} avg={gen_avg:.4f} max={gen_max:.4f} | best={gen_best_ind}"
+        )
 
         history_rows.append({
             "generation": gen,
-            "fitness_min": record["min"],
-            "fitness_avg": record["avg"],
-            "fitness_max": record["max"],
-            "best_max_depth": best_params["max_depth"],
-            "best_min_samples_split": best_params["min_samples_split"],
-            "best_min_samples_leaf": best_params["min_samples_leaf"],
-            "best_criterion": best_params["criterion"],
+            "fitness_min": gen_min,
+            "fitness_avg": gen_avg,
+            "fitness_max": gen_max,
+            "best_max_depth": gen_best_ind["max_depth"],
+            "best_min_samples_split": gen_best_ind["min_samples_split"],
+            "best_min_samples_leaf": gen_best_ind["min_samples_leaf"],
+            "best_criterion": gen_best_ind["criterion"],
+            "best_splitter": gen_best_ind["splitter"],
+            "best_max_features": gen_best_ind["max_features"],
         })
 
-        logger.info(
-            "Tree Gen %d | min=%.4f avg=%.4f max=%.4f | best=%s",
-            gen, record["min"], record["avg"], record["max"], best_params
-        )
+        # 3) Nova população (elitismo simples: mantém o melhor)
+        new_population = [gen_best_ind.copy()]
 
-    best_ind = tools.selBest(pop, 1)[0]
-    best_params = _decode_tree_individual(best_ind)
+        while len(new_population) < config.population_size:
+            # seleção
+            p1 = _tournament_selection(population, fitnesses, rng, config.tournament_k)
+            p2 = _tournament_selection(population, fitnesses, rng, config.tournament_k)
 
-    best_model = DecisionTreeClassifier(**best_params)
-    history_df = pd.DataFrame(history_rows)
+            # crossover
+            if rng.random() < config.cx_prob:
+                c1, c2 = _crossover(p1, p2, rng)
+            else:
+                c1, c2 = p1.copy(), p2.copy()
 
-    return best_model, best_params, history_df
+            # mutação
+            c1 = _mutate(c1, rng, config.mut_prob)
+            c2 = _mutate(c2, rng, config.mut_prob)
+
+            new_population.append(c1)
+            if len(new_population) < config.population_size:
+                new_population.append(c2)
+
+        population = new_population
+
+    # 4) Treina modelo final com melhores hiperparâmetros no treino completo
+    best_model = _build_model(best_params, random_state=config.random_state)
+    best_model.fit(X_train, y_train)
+
+    history = pd.DataFrame(history_rows)
+    return best_model, best_params, history
