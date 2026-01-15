@@ -1,4 +1,15 @@
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.metrics import (
+    accuracy_score,
+    recall_score,
+    f1_score,
+    confusion_matrix
+)
+
 
 def verificar_overfitting(model, X_train, y_train, X_test, y_test, model_name="Modelo"):
     """
@@ -75,3 +86,46 @@ def testar_modelo(model, scaler, casos, nomes=None):
     display(resultados[['Previsão'] + ([col for col in resultados.columns if col not in ['Previsão', 'Paciente']] or [])])
 
     return resultados
+
+def evaluate_metrics(model, X_test, y_test):
+    y_pred = model.predict(X_test)
+
+    acc = accuracy_score(y_test, y_pred)
+    rec = recall_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred)
+    cm = confusion_matrix(y_test, y_pred)
+
+    return acc, rec, f1, cm
+
+def compare_models(models, X_test, y_test, show_confusion=True):
+    """
+    models: lista de tuplas (nome_modelo, modelo_treinado)
+    """
+    rows = []
+    cms = {}
+
+    for name, model in models:
+        acc, rec, f1, cm = evaluate_metrics(model, X_test, y_test)
+
+        rows.append({
+            "Modelo": name,
+            "Accuracy": round(acc, 4),
+            "Recall": round(rec, 4),
+            "F1-score": round(f1, 4)
+        })
+
+        cms[name] = cm
+
+    df = pd.DataFrame(rows).sort_values(by="Recall", ascending=False)
+
+    if show_confusion:
+        for name, cm in cms.items():
+            plt.figure(figsize=(4.5, 3.5))
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False)
+            plt.title(f"Matriz de Confusão — {name}")
+            plt.xlabel("Predito")
+            plt.ylabel("Real")
+            plt.tight_layout()
+            plt.show()
+
+    return df
