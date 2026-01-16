@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import logging
@@ -10,9 +9,16 @@ import numpy as np
 import pandas as pd
 
 from deap import base, creator, tools
-from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.model_selection import StratifiedKFold, cross_validate, cross_val_predict
 from sklearn.neighbors import KNeighborsClassifier
 
+from sklearn.metrics import (
+    make_scorer,
+    accuracy_score,
+    recall_score,
+    f1_score,
+    confusion_matrix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,35 +35,51 @@ class GAConfig:
     tournament_size: int = 3
     random_state: int = 42
 
+    # NOVO: elitismo (mantém os melhores indivíduos a cada geração)
+    elitism: int = 1
+
     # Avaliação (fitness)
     cv_folds: int = 5
-   
-    # Peso das métricas (prioriza recall por contexto médico)
-    w_recall: float = 0.5
-    w_f1: float = 0.3
-    w_acc: float = 0.2
+
+    # ---------------------------------------------------
+    # PESOS DAS MÉTRICAS (contexto médico)
+    # ---------------------------------------------------
+    # Antes (mais equilibrado):
+    # w_recall: float = 0.5
+    # w_f1: float = 0.3
+    # w_acc: float = 0.2
+
+    # Agora: garantimos foco em maligno (classe positiva = 1)
+    w_recall_pos: float = 0.65
+    w_f1_pos: float = 0.25
+    w_acc: float = 0.10
+
+    # NOVO: penalidade para falsos negativos (FN)
+    # Isso força o GA a evitar configurações que ignoram malignos.
+    use_fn_penalty: bool = True
+    fn_penalty_weight: float = 0.15  
 
 
 # Espaço de busca do KNN (genes)
 KNN_SPACE = {
-    "n_neighbors": (3, 25),  
-    "weights": ["uniform", "distance"],  
-    "metric": ["euclidean", "manhattan"],  
+    # Antes: (3, 25)
+    # Agora: amplia para explorar soluções com K menor/maior
+    "n_neighbors": (1, 35),
+    "weights": ["uniform", "distance"],
+    "metric": ["euclidean", "manhattan"],
 }
 
 
 def _decode_individual(individual: List[int]) -> Dict[str, Any]:
-    
     n_neighbors = int(individual[0])
     weights = KNN_SPACE["weights"][int(individual[1])]
     metric = KNN_SPACE["metric"][int(individual[2])]
 
-    params = {
+    return {
         "n_neighbors": n_neighbors,
         "weights": weights,
         "metric": metric,
     }
-    return params
 
 
 def _evaluate_knn_fitness(
@@ -66,7 +88,18 @@ def _evaluate_knn_fitness(
     y: np.ndarray,
     config: GAConfig,
 ) -> Tuple[float]:
-   
+    """
+    Fitness (função objetivo) do GA.
+
+    Antes:
+      - scoring usava strings ("recall", "f1") e podia não garantir
+        recall da classe 1 (maligno) dependendo da configuração.
+      - não havia penalidade direta para falsos negativos.
+
+    Agora:
+      - scorers com pos_label=1 (maligno) garantido;
+      - opcional: penaliza taxa de falsos negativos via cross_val_predict.
+    """
     params = _decode_individual(individual)
     model = KNeighborsClassifier(**params)
 
@@ -76,25 +109,51 @@ def _evaluate_knn_fitness(
         random_state=config.random_state,
     )
 
+    # ---------------------------------------------------
+    # Antes:
+    # scoring = {"acc": "accuracy", "recall": "recall", "f1": "f1"}
+    # scores = cross_validate(model, X, y, cv=cv, scoring=scoring, n_jobs=-1)
+    # acc = mean(test_acc), rec = mean(test_recall), f1 = mean(test_f1)
+    # fitness = w_recall*rec + w_f1*f1 + w_acc*acc
+    # ---------------------------------------------------
+
+    # Agora: scorers garantindo classe positiva = 1 (maligno)
     scoring = {
-        "acc": "accuracy",
-        "recall": "recall",
-        "f1": "f1",
+        "acc": make_scorer(accuracy_score),
+        "recall_pos": make_scorer(recall_score, pos_label=1),
+        "f1_pos": make_scorer(f1_score, pos_label=1),
     }
 
     scores = cross_validate(model, X, y, cv=cv, scoring=scoring, n_jobs=-1)
 
     acc = float(np.mean(scores["test_acc"]))
-    rec = float(np.mean(scores["test_recall"]))
-    f1 = float(np.mean(scores["test_f1"]))
+    rec_pos = float(np.mean(scores["test_recall_pos"]))
+    f1_pos = float(np.mean(scores["test_f1_pos"]))
 
-    fitness = (config.w_recall * rec) + (config.w_f1 * f1) + (config.w_acc * acc)
+    fitness = (
+        (config.w_recall_pos * rec_pos)
+        + (config.w_f1_pos * f1_pos)
+        + (config.w_acc * acc)
+    )
+
+    # NOVO: penalidade por FN (falsos negativos)
+    # cross_validate não retorna FN diretamente
+    # usamos cross_val_predict pra obter y_pred e montar confusion matrix
+    if config.use_fn_penalty:
+        y_pred = cross_val_predict(model, X, y, cv=cv, n_jobs=-1)
+        cm = confusion_matrix(y, y_pred, labels=[0, 1])
+        # cm = [[TN, FP],
+        #       [FN, TP]]
+        fn = int(cm[1, 0])
+        positives = max(int(np.sum(y == 1)), 1)
+        fn_rate = fn / positives
+
+        fitness = fitness - (config.fn_penalty_weight * fn_rate)
 
     return (fitness,)
 
 
 def _mutate_individual(individual: List[int], indpb: float = 0.2) -> Tuple[List[int]]:
-    
     # gene 0: n_neighbors
     if random.random() < indpb:
         low, high = KNN_SPACE["n_neighbors"]
@@ -116,7 +175,12 @@ def optimize_knn_with_ga(
     y: np.ndarray,
     config: Optional[GAConfig] = None,
 ) -> Tuple[KNeighborsClassifier, Dict[str, Any], pd.DataFrame]:
-    
+    """
+    Retorna:
+      best_model (não treinado),
+      best_params,
+      history_df com evolução do GA.
+    """
     if config is None:
         config = GAConfig()
 
@@ -144,8 +208,13 @@ def optimize_knn_with_ga(
         return random.randrange(len(KNN_SPACE["metric"]))
 
     # Individual: [n_neighbors, weights_idx, metric_idx]
-    toolbox.register("individual", tools.initCycle, creator.Individual,
-                     (gene_n_neighbors, gene_weights_idx, gene_metric_idx), n=1)
+    toolbox.register(
+        "individual",
+        tools.initCycle,
+        creator.Individual,
+        (gene_n_neighbors, gene_weights_idx, gene_metric_idx),
+        n=1,
+    )
     toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 
     # Operators
@@ -163,7 +232,7 @@ def optimize_knn_with_ga(
     stats.register("avg", np.mean)
     stats.register("max", np.max)
 
-    history_rows = []
+    history_rows: List[Dict[str, Any]] = []
 
     # Avalia população inicial
     invalid = [ind for ind in pop if not ind.fitness.valid]
@@ -172,8 +241,11 @@ def optimize_knn_with_ga(
         ind.fitness.values = fit
 
     for gen in range(1, config.n_generations + 1):
-        # Seleção
-        offspring = toolbox.select(pop, len(pop))
+        # NOVO: elitismo (preserva os melhores)
+        elites = tools.selBest(pop, config.elitism) if config.elitism > 0 else []
+
+        # Seleção (desconta elites para manter tamanho final da pop)
+        offspring = toolbox.select(pop, len(pop) - len(elites))
         offspring = list(map(toolbox.clone, offspring))
 
         # Cruzamento
@@ -195,8 +267,8 @@ def optimize_knn_with_ga(
         for ind, fit in zip(invalid, fitnesses):
             ind.fitness.values = fit
 
-        # Substitui população
-        pop[:] = offspring
+        # Substitui população (agora com elites)
+        pop[:] = offspring + elites
 
         # Logging de estatísticas
         record = stats.compile(pop)
