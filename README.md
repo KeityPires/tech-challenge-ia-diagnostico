@@ -10,6 +10,7 @@ Este projeto tem como objetivo o desenvolvimento de um algoritmo de Machine Lear
 - Matplotlib, Seaborn  
 - SHAP (interpretação dos modelos)  
 - Docker & Jupyter Notebook  
+- Deap
 
 # Estrutura do Projeto
 tech-challenge-ia-diagnostico/
@@ -17,6 +18,8 @@ tech-challenge-ia-diagnostico/
 │ ├── preprocess.py # Funções de pré-processamento e visualização
 │ ├── model.py # Treinamento de modelos KNN e Árvore de Decisão
 │ ├── evaluate.py # Avaliação e métricas dos modelos
+│ ├── genetic_optimization_tree.py # Algoritmo Gnético para Otimização do modelo 
+│ ├── genetic_optimization_knn.py # Algoritmo Gnético para Otimização do modelo 
 │ └── utils.py # Testes e funções auxiliares
 │
 ├── notebooks/
