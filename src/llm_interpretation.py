@@ -1,6 +1,8 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Any, Optional
+import os
+from openai import OpenAI
 
 
 @dataclass
@@ -96,3 +98,22 @@ def checklist_quality(text: str) -> Dict[str, int]:
     }
     score["total"] = sum(score.values())
     return score
+
+def call_gpt(prompt: str, model: str = "gpt-4.1-mini", temperature: float = 0.2) -> str:
+    """
+    Chama uma LLM via OpenAI API e retorna texto.
+    Mantém o resto do pipeline igual (você já gera o prompt).
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY não encontrada. Defina como variável de ambiente.")
+
+    client = OpenAI(api_key=api_key)
+
+    resp = client.responses.create(
+        model=model,
+        input=prompt,
+        temperature=temperature,
+    )
+    return resp.output_text
+
