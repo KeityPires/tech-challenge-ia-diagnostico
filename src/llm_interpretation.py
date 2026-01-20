@@ -80,7 +80,7 @@ Tarefa:
 
 def checklist_quality(text: str) -> Dict[str, int]:
     """
-    Checklist simples. Ideal: você ajusta manualmente ao avaliar.
+    Checklist simples
     """
     t = text.lower()
 
@@ -88,7 +88,6 @@ def checklist_quality(text: str) -> Dict[str, int]:
     acao = 2 if ("triagem" in t or "exame" in t or "acompanhamento" in t) else 1
     aviso = 2 if ("não substitui" in t or "nao substitui" in t) else 1
 
-    # Os itens abaixo você pode manter como 2 e revisar manualmente depois.
     score = {
         "coerencia_com_metricas": 2,
         "clareza_para_medico": 2,
@@ -100,10 +99,7 @@ def checklist_quality(text: str) -> Dict[str, int]:
     return score
 
 def call_gpt(prompt: str, model: str = "gpt-4.1-mini", temperature: float = 0.2) -> str:
-    """
-    Chama uma LLM via OpenAI API e retorna texto.
-    Mantém o resto do pipeline igual (você já gera o prompt).
-    """
+   
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY não encontrada. Defina como variável de ambiente.")
