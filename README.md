@@ -2,6 +2,8 @@
 Projeto de IA para suporte a diagnóstico médico — Pós Tech Fiap
 # Tech Challenge - Fase 1: Diagnóstico de Câncer de Mama
 Este projeto tem como objetivo o desenvolvimento de um algoritmo de Machine Learning capaz de classificar um paciente com um tumor 'Maligno' ou 'Benigno', através do treinamento com o dataset *Breast Cancer Wisconsin (Diagnostic)*. Utilizando os modelos de Árvore de Decisão e K-Nearest Neighbors para chegar ao resultado esperado.
+# Tech Challenge - Fase 2: Diagnóstico de Câncer de Mama
+Na Fase 2, os modelos foram otimizados por meio de Algoritmos Genéticos e integrados a uma Large Language Model (LLM) para geração de explicações clínicas em linguagem natural, com foco em interpretabilidade e suporte à decisão médica.
 
 # Tecnologias Utilizadas
 - Python 3.10  
@@ -10,7 +12,8 @@ Este projeto tem como objetivo o desenvolvimento de um algoritmo de Machine Lear
 - Matplotlib, Seaborn  
 - SHAP (interpretação dos modelos)  
 - Docker & Jupyter Notebook  
-- Deap
+- DEAP
+- OpenAI GPT 
 
 # Estrutura do Projeto
 tech-challenge-ia-diagnostico/
@@ -20,6 +23,7 @@ tech-challenge-ia-diagnostico/
 │ ├── evaluate.py # Avaliação e métricas dos modelos
 │ ├── genetic_optimization_tree.py # Algoritmo Gnético para Otimização do modelo 
 │ ├── genetic_optimization_knn.py # Algoritmo Gnético para Otimização do modelo 
+│ ├── llm_interpretation.py # Geração do Prompt e integração a OpenAI
 │ └── utils.py # Testes e funções auxiliares
 │
 ├── notebooks/

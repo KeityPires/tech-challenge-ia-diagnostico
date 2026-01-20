@@ -25,6 +25,12 @@ pyyaml==6.0.2
 jupyter==1.0.0
 ipykernel==6.29.3
 
-
 # Algoritmo Genético
-deap
+deap==1.4.1
+
+# Integração com LLM
+openai==1.10.0
+python-dotenv==1.0.1
+
+# Utilitários
+tqdm==4.66.4
