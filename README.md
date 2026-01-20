@@ -50,6 +50,11 @@ http://localhost:8888
 - K-Nearest Neighbors (KNN)
 - Decision Tree Classifier
 
+## Documentação da API
+Este projeto integra a API da OpenAI (GPT) para interpretação dos resultados dos modelos e geração de explicações clínicas em linguagem natural.
+A documentação completa de configuração, uso e prompt engineering encontra-se em:
+- 'docs/api_openai.md'
+
 👩‍💻 Autora
 
 Keity Pires
