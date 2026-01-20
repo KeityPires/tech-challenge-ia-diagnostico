@@ -31,6 +31,10 @@ tech-challenge-ia-diagnostico/
 │
 ├── data/
 │ └── data.csv # Base de dados utilizada
+|
+├── tests/
+│ └── test_pipeline.py # testes das funções da Fase 1
+│ └── test_ga_and_llm.py # testes das funções da Fase 2
 │
 ├── requirements.txt # Dependências do projeto
 ├── Dockerfile # Configuração do container Docker
