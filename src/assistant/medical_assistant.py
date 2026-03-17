@@ -3,7 +3,25 @@ from src.assistant.prompts import SYSTEM_PROMPT
 from src.security.guardrails import is_safe_question
 from src.security.logging_system import log_interaction
 
-def answer_medical_question(question, llm, vector_store):
+
+def format_sources(docs):
+    sources = []
+
+    for i, doc in enumerate(docs, start=1):
+        sources.append(
+            {
+                "label": f"Fonte {i}",
+                "source": doc.metadata.get("source", "desconhecida"),
+                "collection": doc.metadata.get("collection", "desconhecida"),
+                "source_file": doc.metadata.get("source_file", "desconhecido"),
+                "id": doc.metadata.get("id", "sem_id")
+            }
+        )
+
+    return sources
+
+
+def answer_medical_question(question, llm, retriever):
     if not is_safe_question(question):
         answer = (
             "Não posso fornecer esse tipo de orientação diretamente. "
@@ -15,10 +33,13 @@ def answer_medical_question(question, llm, vector_store):
             "sources": []
         }
 
-    docs = vector_store.similarity_search(question, k=3)
+    docs = retriever.invoke(question)
 
     context = "\n\n".join(
-        [f"Fonte: {doc.metadata.get('source', 'desconhecida')}\n{doc.page_content}" for doc in docs]
+        [
+            f"Fonte: {doc.metadata.get('source_file', 'desconhecida')}\n{doc.page_content}"
+            for doc in docs
+        ]
     )
 
     user_prompt = f"""
@@ -29,7 +50,7 @@ Contexto recuperado:
 {context}
 
 Responda de forma objetiva, cautelosa e baseada apenas no contexto.
-Inclua ao final as fontes consultadas.
+Se não houver contexto suficiente, diga isso explicitamente.
 """
 
     messages = [
@@ -39,7 +60,7 @@ Inclua ao final as fontes consultadas.
 
     response = llm.invoke(messages)
     answer = response.content
-    sources = [doc.metadata.get("source", "desconhecida") for doc in docs]
+    sources = format_sources(docs)
 
     log_interaction(question, answer, sources)
 
