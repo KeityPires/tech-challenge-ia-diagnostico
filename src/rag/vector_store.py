@@ -3,32 +3,36 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
-def build_vector_store(documents, chunk_size: int = 500, chunk_overlap: int = 50):
-    embedding_model = OllamaEmbeddings(model="nomic-embed-text")
+def build_vector_store(documents):
 
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_size=500,
+        chunk_overlap=50
     )
 
-    split_documents = text_splitter.split_documents(documents)
+    docs = text_splitter.split_documents(documents)
 
-    vector_store = FAISS.from_documents(
-        split_documents,
-        embedding_model
-    )
+    embeddings = OllamaEmbeddings(model="nomic-embed-text")
 
-    return vector_store
+    vector_store = FAISS.from_documents(docs, embeddings)
 
+    num_chunks = len(docs)
+
+    return vector_store, num_chunks
 
 def save_vector_store(vector_store, path: str):
     vector_store.save_local(path)
+    print(f"Base vetorial salva em: {path}")
 
 
 def load_vector_store(path: str):
     embedding_model = OllamaEmbeddings(model="nomic-embed-text")
-    return FAISS.load_local(
+
+    vector_store = FAISS.load_local(
         path,
         embedding_model,
         allow_dangerous_deserialization=True
     )
+
+    print(f"Base vetorial carregada de: {path}")
+    return vector_store
