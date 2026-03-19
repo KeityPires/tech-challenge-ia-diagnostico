@@ -1,5 +1,6 @@
 from src.security.guardrails import evaluate_question_risk, build_guardrail_response
 from src.assistant.response_formatter import format_sources
+from src.security.logging_system import log_interaction
 
 
 def answer_medical_question(question: str, llm, retriever):
@@ -9,8 +10,20 @@ def answer_medical_question(question: str, llm, retriever):
 
     # 2. Se for alto risco → bloquear
     if risk["action"] == "block":
+        answer = build_guardrail_response(risk)
+
+        # Log do bloqueio
+        log_interaction(
+            question=question,
+            answer=answer,
+            sources=[],
+            risk_level=risk["risk_level"],
+            status="blocked",
+            retrieved_docs_count=0
+        )
+
         return {
-            "answer": build_guardrail_response(risk),
+            "answer": answer,
             "sources": [],
             "status": "blocked",
             "risk_level": risk["risk_level"]
@@ -53,6 +66,16 @@ Question:
 
     # 7. Fontes
     sources = format_sources(docs)
+
+    # Log da interação normal
+    log_interaction(
+        question=question,
+        answer=final_answer,
+        sources=sources,
+        risk_level=risk["risk_level"],
+        status="success",
+        retrieved_docs_count=len(docs)
+    )
 
     return {
         "answer": final_answer,
