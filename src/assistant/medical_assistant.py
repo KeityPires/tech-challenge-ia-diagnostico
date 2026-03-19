@@ -1,70 +1,62 @@
-from langchain_core.messages import SystemMessage, HumanMessage
-from src.assistant.prompts import SYSTEM_PROMPT
-from src.security.guardrails import is_safe_question
-from src.security.logging_system import log_interaction
+from src.security.guardrails import evaluate_question_risk, build_guardrail_response
+from src.assistant.response_formatter import format_sources
 
 
-def format_sources(docs):
-    sources = []
+def answer_medical_question(question: str, llm, retriever):
+    
+    # 1. Avaliar risco
+    risk = evaluate_question_risk(question)
 
-    for i, doc in enumerate(docs, start=1):
-        sources.append(
-            {
-                "label": f"Fonte {i}",
-                "source": doc.metadata.get("source", "desconhecida"),
-                "collection": doc.metadata.get("collection", "desconhecida"),
-                "source_file": doc.metadata.get("source_file", "desconhecido"),
-                "id": doc.metadata.get("id", "sem_id")
-            }
-        )
-
-    return sources
-
-
-def answer_medical_question(question, llm, retriever):
-    if not is_safe_question(question):
-        answer = (
-            "Não posso fornecer esse tipo de orientação diretamente. "
-            "É necessária validação humana por profissional habilitado."
-        )
-        log_interaction(question, answer, [])
+    # 2. Se for alto risco → bloquear
+    if risk["action"] == "block":
         return {
-            "answer": answer,
-            "sources": []
+            "answer": build_guardrail_response(risk),
+            "sources": [],
+            "status": "blocked",
+            "risk_level": risk["risk_level"]
         }
 
+    # 3. Recuperar contexto
     docs = retriever.invoke(question)
 
-    context = "\n\n".join(
-        [
-            f"Fonte: {doc.metadata.get('source_file', 'desconhecida')}\n{doc.page_content}"
-            for doc in docs
-        ]
-    )
+    context = "\n".join([doc.page_content for doc in docs])
 
-    user_prompt = f"""
-Pergunta clínica:
-{question}
+    # 4. Prompt
+    prompt = f"""
+You are a medical educational assistant focused on breast cancer information.
 
-Contexto recuperado:
+Use only the context below to answer the question.
+Do not invent information.
+If the context is insufficient, clearly say that the available sources are insufficient.
+Do not provide a definitive diagnosis.
+Do not prescribe treatment.
+Do not prescribe dosage.
+Always answer in a clear and educational tone.
+
+Context:
 {context}
 
-Responda de forma objetiva, cautelosa e baseada apenas no contexto.
-Se não houver contexto suficiente, diga isso explicitamente.
+Question:
+{question}
 """
 
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=user_prompt)
-    ]
+    # 5. LLM
+    response = llm.invoke(prompt)
+    answer = response.content if hasattr(response, "content") else str(response)
 
-    response = llm.invoke(messages)
-    answer = response.content
+    # 6. Warning (se médio risco)
+    warning = ""
+    if risk["action"] == "allow_with_warning":
+        warning = build_guardrail_response(risk) + "\n\n"
+
+    final_answer = f"{warning}{answer}"
+
+    # 7. Fontes
     sources = format_sources(docs)
 
-    log_interaction(question, answer, sources)
-
     return {
-        "answer": answer,
-        "sources": sources
+        "answer": final_answer,
+        "sources": sources,
+        "status": "success",
+        "risk_level": risk["risk_level"]
     }
