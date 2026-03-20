@@ -6,9 +6,10 @@ COPY requirements.txt .
 COPY src ./src
 COPY notebooks ./notebooks
 COPY data ./data
+COPY README.md .
 
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt jupyter
+    && pip install --no-cache-dir -r requirements.txt
 
 EXPOSE 8888
 

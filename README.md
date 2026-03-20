@@ -170,6 +170,16 @@ Este projeto integra a API da OpenAI (GPT) para interpretação dos resultados d
 A documentação completa de configuração, uso e prompt engineering encontra-se em:
 - 'docs/api_openai.md'
 
+## Observação sobre o Ollama
+
+Para a execução da Fase 3, o Ollama deve estar instalado e em execução no ambiente local, com os modelos necessários previamente baixados.
+
+Exemplo:
+
+ollama pull mistral
+ollama pull nomic-embed-text
+ollama serve
+
 Limitações:
 - Não substitui avaliação médica profissional
 - Respostas limitadas à base MedQuAD
