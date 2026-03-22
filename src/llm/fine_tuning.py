@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
 import pandas as pd
+import torch
 from sklearn.model_selection import train_test_split
 
 
@@ -15,7 +16,6 @@ def prepare_finetuning_dataset(
         "avaliação médica profissional."
     ),
 ) -> pd.DataFrame:
-    """Converte um DataFrame com colunas question/answer em dataset textual para SFT."""
     required_columns = {"question", "answer"}
     missing = required_columns - set(df.columns)
     if missing:
@@ -43,8 +43,8 @@ def prepare_finetuning_dataset(
         ),
         axis=1,
     )
-    return dataset_df[["question", "answer", "text"]]
 
+    return dataset_df[["question", "answer", "text"]]
 
 
 def split_finetuning_dataset(
@@ -52,7 +52,6 @@ def split_finetuning_dataset(
     test_size: float = 0.1,
     random_state: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Realiza o split treino/validação de forma reprodutível."""
     if dataset_df.empty:
         raise ValueError("O dataset formatado está vazio.")
 
@@ -65,23 +64,20 @@ def split_finetuning_dataset(
     return train_df.reset_index(drop=True), val_df.reset_index(drop=True)
 
 
-
 def save_finetuning_dataset(
     dataset_df: pd.DataFrame,
     output_path: str,
 ) -> str:
-    """Salva o dataset formatado em JSONL para auditoria e reuso."""
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
     dataset_df.to_json(output, orient="records", lines=True, force_ascii=False)
     return str(output)
 
 
-
 def run_medical_finetuning(
     df_medquad: pd.DataFrame,
     base_model: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-    output_dir: str = "./artifacts/mistral-medquad-lora",
+    output_dir: str = "./artifacts/tinyllama-medquad-lora",
     instruction: str = (
         "Responda à pergunta médica de forma clara, objetiva, cautelosa e "
         "informativa, sem prescrever tratamento definitivo nem substituir "
@@ -89,12 +85,12 @@ def run_medical_finetuning(
     ),
     test_size: float = 0.1,
     random_state: int = 42,
-    num_train_epochs: int = 2,
+    num_train_epochs: int = 1,
     learning_rate: float = 2e-4,
-    per_device_train_batch_size: int = 2,
-    per_device_eval_batch_size: int = 2,
-    gradient_accumulation_steps: int = 4,
-    max_seq_length: int = 1024,
+    per_device_train_batch_size: int = 1,
+    per_device_eval_batch_size: int = 1,
+    gradient_accumulation_steps: int = 2,
+    max_seq_length: int = 128,
     lora_r: int = 8,
     lora_alpha: int = 16,
     lora_dropout: float = 0.05,
@@ -102,21 +98,16 @@ def run_medical_finetuning(
     save_merged_model: bool = False,
     merged_model_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Executa fine-tuning supervisionado com LoRA/QLoRA.
-
-    Dependências necessárias:
-    transformers, datasets, peft, trl, accelerate, bitsandbytes, sentencepiece
-    """
-    # Imports pesados aqui para não quebrar o restante do projeto quando o treino não for usado.
     from datasets import Dataset
-    from peft import LoraConfig, prepare_model_for_kbit_training
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
         BitsAndBytesConfig,
         TrainingArguments,
+        Trainer,
+        DataCollatorForLanguageModeling,
     )
-    from trl import SFTTrainer
 
     dataset_df = prepare_finetuning_dataset(df_medquad, instruction=instruction)
     train_df, val_df = split_finetuning_dataset(
@@ -125,8 +116,8 @@ def run_medical_finetuning(
         random_state=random_state,
     )
 
-    train_dataset = Dataset.from_pandas(train_df)
-    val_dataset = Dataset.from_pandas(val_df)
+    train_dataset = Dataset.from_pandas(train_df[["text"]], preserve_index=False)
+    val_dataset = Dataset.from_pandas(val_df[["text"]], preserve_index=False)
 
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
@@ -136,11 +127,27 @@ def run_medical_finetuning(
         tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
 
+    def tokenize_function(examples):
+        tokenized = tokenizer(
+            examples["text"],
+            truncation=True,
+            max_length=max_seq_length,
+            padding="max_length",
+        )
+        tokenized["labels"] = tokenized["input_ids"].copy()
+        return tokenized
+
+    train_dataset = train_dataset.map(tokenize_function, batched=True)
+    val_dataset = val_dataset.map(tokenize_function, batched=True)
+
+    train_dataset = train_dataset.remove_columns(["text"])
+    val_dataset = val_dataset.remove_columns(["text"])
+
     quantization_config = None
     if use_4bit:
         quantization_config = BitsAndBytesConfig(
             load_in_4bit=True,
-            bnb_4bit_compute_dtype="float16",
+            bnb_4bit_compute_dtype=torch.float16,
             bnb_4bit_quant_type="nf4",
             bnb_4bit_use_double_quant=True,
         )
@@ -171,57 +178,88 @@ def run_medical_finetuning(
         ],
     )
 
-    training_args = TrainingArguments(
-    output_dir=str(output_path),
-    num_train_epochs=num_train_epochs,
-    learning_rate=learning_rate,
-    per_device_train_batch_size=per_device_train_batch_size,
-    per_device_eval_batch_size=per_device_eval_batch_size,
-    gradient_accumulation_steps=gradient_accumulation_steps,
-    save_strategy="epoch",
-    logging_steps=10,
-    save_total_limit=2,
-    load_best_model_at_end=False,
-    fp16=True,
-    report_to="none",
-)
+    model = get_peft_model(model, lora_config)
 
-    trainer = SFTTrainer(
-        model=model,
+    try:
+        training_args = TrainingArguments(
+            output_dir=str(output_path),
+            num_train_epochs=num_train_epochs,
+            learning_rate=learning_rate,
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            logging_steps=10,
+            save_total_limit=2,
+            load_best_model_at_end=False,
+            fp16=torch.cuda.is_available(),
+            report_to="none",
+            remove_unused_columns=False,
+        )
+    except TypeError:
+        training_args = TrainingArguments(
+            output_dir=str(output_path),
+            num_train_epochs=num_train_epochs,
+            learning_rate=learning_rate,
+            per_device_train_batch_size=per_device_train_batch_size,
+            per_device_eval_batch_size=per_device_eval_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            evaluation_strategy="epoch",
+            save_strategy="epoch",
+            logging_steps=10,
+            save_total_limit=2,
+            load_best_model_at_end=False,
+            fp16=torch.cuda.is_available(),
+            report_to="none",
+            remove_unused_columns=False,
+        )
+
+    data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        peft_config=lora_config,
-        args=training_args,
-        dataset_text_field="text",
-        max_seq_length=max_seq_length,
-        packing=False,
+        mlm=False,
     )
 
-    trainer.train()
+    trainer = None
 
-    trainer.model.save_pretrained(str(output_path))
-    tokenizer.save_pretrained(str(output_path))
+    try:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+        )
 
-    result: Dict[str, Any] = {
-        "status": "success",
-        "base_model": base_model,
-        "output_dir": str(output_path),
-        "train_samples": len(train_dataset),
-        "val_samples": len(val_dataset),
-    }
+        trainer.train()
 
-    if save_merged_model:
-        if merged_model_dir is None:
-            merged_model_dir = f"{output_dir}-merged"
+        trainer.model.save_pretrained(str(output_path))
+        tokenizer.save_pretrained(str(output_path))
 
-        merged_path = Path(merged_model_dir)
-        merged_path.mkdir(parents=True, exist_ok=True)
+        result: Dict[str, Any] = {
+            "status": "success",
+            "base_model": base_model,
+            "output_dir": str(output_path),
+            "train_samples": len(train_dataset),
+            "val_samples": len(val_dataset),
+        }
 
-        merged_model = trainer.model.merge_and_unload()
-        merged_model.save_pretrained(str(merged_path))
-        tokenizer.save_pretrained(str(merged_path))
+        if save_merged_model:
+            if merged_model_dir is None:
+                merged_model_dir = f"{output_dir}-merged"
 
-        result["merged_model_dir"] = str(merged_path)
+            merged_path = Path(merged_model_dir)
+            merged_path.mkdir(parents=True, exist_ok=True)
 
-    return result
+            merged_model = trainer.model.merge_and_unload()
+            merged_model.save_pretrained(str(merged_path))
+            tokenizer.save_pretrained(str(merged_path))
+
+            result["merged_model_dir"] = str(merged_path)
+
+        return result
+
+    except Exception as e:
+        raise RuntimeError(
+            f"Erro durante o fine-tuning: {type(e).__name__}: {e}"
+        ) from e
