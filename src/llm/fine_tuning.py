@@ -172,20 +172,20 @@ def run_medical_finetuning(
     )
 
     training_args = TrainingArguments(
-        output_dir=str(output_path),
-        num_train_epochs=num_train_epochs,
-        learning_rate=learning_rate,
-        per_device_train_batch_size=per_device_train_batch_size,
-        per_device_eval_batch_size=per_device_eval_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        logging_steps=10,
-        save_total_limit=2,
-        load_best_model_at_end=False,
-        fp16=True,
-        report_to="none",
-    )
+    output_dir=str(output_path),
+    num_train_epochs=num_train_epochs,
+    learning_rate=learning_rate,
+    per_device_train_batch_size=per_device_train_batch_size,
+    per_device_eval_batch_size=per_device_eval_batch_size,
+    gradient_accumulation_steps=gradient_accumulation_steps,
+    eval_strategy="epoch",
+    save_strategy="epoch",
+    logging_steps=10,
+    save_total_limit=2,
+    load_best_model_at_end=False,
+    fp16=True,
+    report_to="none",
+)
 
     trainer = SFTTrainer(
         model=model,
