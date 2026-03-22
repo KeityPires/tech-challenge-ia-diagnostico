@@ -80,7 +80,7 @@ def save_finetuning_dataset(
 
 def run_medical_finetuning(
     df_medquad: pd.DataFrame,
-    base_model: str = "mistralai/Mistral-7B-Instruct-v0.2",
+    base_model: str = "google/gemma-2b-it",
     output_dir: str = "./artifacts/mistral-medquad-lora",
     instruction: str = (
         "Responda à pergunta médica de forma clara, objetiva, cautelosa e "
