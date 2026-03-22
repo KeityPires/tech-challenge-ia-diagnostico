@@ -80,7 +80,7 @@ def save_finetuning_dataset(
 
 def run_medical_finetuning(
     df_medquad: pd.DataFrame,
-    base_model: str = "google/gemma-2b-it",
+    base_model: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
     output_dir: str = "./artifacts/mistral-medquad-lora",
     instruction: str = (
         "Responda à pergunta médica de forma clara, objetiva, cautelosa e "
@@ -178,7 +178,6 @@ def run_medical_finetuning(
     per_device_train_batch_size=per_device_train_batch_size,
     per_device_eval_batch_size=per_device_eval_batch_size,
     gradient_accumulation_steps=gradient_accumulation_steps,
-    eval_strategy="epoch",
     save_strategy="epoch",
     logging_steps=10,
     save_total_limit=2,
