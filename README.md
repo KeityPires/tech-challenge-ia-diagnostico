@@ -142,6 +142,12 @@ Informações registradas:
 - número de documentos recuperados  
 - fontes utilizadas  
 
+# Fine-Tuning (Colab)
+O fine-tuning foi executado em ambiente Google Colab devido a limitações de hardware local.
+
+Notebook:
+tech_challenge_ia_finetuning_colab.ipynb
+
 # Explainability
 Todas as respostas incluem:
 
