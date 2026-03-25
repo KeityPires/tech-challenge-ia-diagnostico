@@ -17,7 +17,7 @@ Principais evoluções:
 - Integração com OpenAI GPT
 
 # Tech Challenge - Fase 3: Assistente Médico Virtual
-Na Fase 3, o projeto evolui para um sistema completo de assistência médica baseado em LLM, utilizando arquitetura RAG (Retrieval-Augmented Generation).
+Na Fase 3, o projeto evolui para um sistema de assistência médica baseado em LLM, utilizando arquitetura RAG (Retrieval-Augmented Generation) e Fine Tuning.
 
 O sistema é capaz de:
 - Responder perguntas médicas
@@ -142,11 +142,11 @@ Informações registradas:
 - número de documentos recuperados  
 - fontes utilizadas  
 
-# Fine-Tuning (Colab)
-O fine-tuning foi executado em ambiente Google Colab devido a limitações de hardware local.
+# Fine-Tuning (Kaggle)
+O fine-tuning foi executado em ambiente Kaggle devido a limitações de hardware local.
 
 Notebook:
-tech_challenge_ia_finetuning_colab.ipynb
+fine-tuning-kaggle_.ipynb
 
 # Explainability
 Todas as respostas incluem:
