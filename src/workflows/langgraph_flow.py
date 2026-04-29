@@ -7,6 +7,11 @@ from src.security.guardrails import evaluate_question_risk, build_guardrail_resp
 from src.assistant.response_formatter import format_sources
 from src.security.logging_system import log_interaction
 
+from src.multimodal.video_processor import analyze_video
+from src.multimodal.audio_processor import analyze_audio
+from src.multimodal.multimodal_fusion import calculate_multimodal_risk
+from src.multimodal.alert_generator import generate_alert
+
 
 class AssistantState(TypedDict, total=False):
     question: str
@@ -25,6 +30,15 @@ class AssistantState(TypedDict, total=False):
     answer: str
     sources: List[Dict[str, Any]]
     status: str
+    
+    # novos campos - fase 4
+    video_path: Optional[str]
+    audio_path: Optional[str]
+
+    video_result: Dict[str, Any]
+    audio_result: Dict[str, Any]
+    multimodal_result: Dict[str, Any]
+    multimodal_context: str
 
 
 def guardrails_node(state: AssistantState) -> AssistantState:
@@ -146,14 +160,76 @@ Recent exams:
 
     return state
 
+def video_analysis_node(state: AssistantState) -> AssistantState:
+    video_path = state.get("video_path")
+
+    if not video_path:
+        state["video_result"] = {
+            "modality": "video",
+            "risk_score": 0,
+            "risk_level": "not_provided",
+            "flags": [],
+            "metadata": {}
+        }
+        return state
+
+    state["video_result"] = analyze_video(video_path)
+    return state
+
+
+def audio_analysis_node(state: AssistantState) -> AssistantState:
+    audio_path = state.get("audio_path")
+
+    if not audio_path:
+        state["audio_result"] = {
+            "modality": "audio",
+            "risk_score": 0,
+            "risk_level": "not_provided",
+            "flags": [],
+            "transcription": ""
+        }
+        return state
+
+    state["audio_result"] = analyze_audio(audio_path)
+    return state
+
+
+def multimodal_fusion_node(state: AssistantState) -> AssistantState:
+    video_result = state.get("video_result", {})
+    audio_result = state.get("audio_result", {})
+
+    multimodal_result = calculate_multimodal_risk(video_result, audio_result)
+    alert_text = generate_alert(multimodal_result)
+
+    state["multimodal_result"] = multimodal_result
+    state["multimodal_context"] = f"""
+MULTIMODAL ANALYSIS:
+Video risk score: {multimodal_result.get("video_score")}
+Audio risk score: {multimodal_result.get("audio_score")}
+Final multimodal score: {multimodal_result.get("final_score")}
+Risk level: {multimodal_result.get("risk_level")}
+Alert generated: {multimodal_result.get("alert")}
+
+Evidence:
+{chr(10).join(["- " + item for item in multimodal_result.get("evidences", [])])}
+
+Alert message:
+{alert_text}
+""".strip()
+
+    return state
 
 def merge_context_node(state: AssistantState) -> AssistantState:
     patient_context = state.get("patient_context", "")
     rag_context = state.get("context", "")
+    multimodal_context = state.get("multimodal_context", "")
 
     state["final_context"] = f"""
 STRUCTURED PATIENT DATA:
 {patient_context}
+
+MULTIMODAL ANALYSIS:
+{multimodal_context}
 
 MEDICAL KNOWLEDGE RETRIEVED:
 {rag_context}
@@ -164,7 +240,7 @@ MEDICAL KNOWLEDGE RETRIEVED:
 
 def generate_node(state: AssistantState, llm) -> AssistantState:
     prompt = f"""
-You are a medical educational assistant focused on breast cancer information.
+You are a medical educational assistant focused on women's health, maternal health, psychological well-being and breast cancer information.
 
 Use only the context below to answer the question.
 Prioritize patient-specific structured data when relevant.
@@ -174,6 +250,8 @@ Do not provide a definitive diagnosis.
 Do not prescribe treatment.
 Do not prescribe dosage.
 Always answer in a clear and educational tone.
+
+Use multimodal analysis only as triage support, never as a definitive diagnosis.
 
 Context:
 {state.get("final_context", state.get("context", ""))}
@@ -222,10 +300,14 @@ def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_d
     graph.add_node("guardrails", guardrails_node)
     graph.add_node("retrieve", lambda state: retrieve_node(state, retriever))
     graph.add_node("patient_context", lambda state: patient_context_node(state, db_path))
+    graph.add_node("video_analysis", video_analysis_node)
+    graph.add_node("audio_analysis", audio_analysis_node)
+    graph.add_node("multimodal_fusion", multimodal_fusion_node)
     graph.add_node("merge_context", merge_context_node)
     graph.add_node("generate", lambda state: generate_node(state, llm))
     graph.add_node("format", format_node)
     graph.add_node("log", log_node)
+    
 
     graph.set_entry_point("guardrails")
 
@@ -239,7 +321,10 @@ def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_d
     )
 
     graph.add_edge("retrieve", "patient_context")
-    graph.add_edge("patient_context", "merge_context")
+    graph.add_edge("patient_context", "video_analysis")
+    graph.add_edge("video_analysis", "audio_analysis")
+    graph.add_edge("audio_analysis", "multimodal_fusion")
+    graph.add_edge("multimodal_fusion", "merge_context")
     graph.add_edge("merge_context", "generate")
     graph.add_edge("generate", "format")
     graph.add_edge("format", "log")
