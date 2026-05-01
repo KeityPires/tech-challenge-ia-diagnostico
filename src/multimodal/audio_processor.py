@@ -1,4 +1,5 @@
 from pathlib import Path
+import speech_recognition as sr
 
 
 def analyze_audio(audio_path: str) -> dict:
@@ -7,9 +8,16 @@ def analyze_audio(audio_path: str) -> dict:
     if not audio_file.exists():
         raise FileNotFoundError(f"Áudio não encontrado: {audio_path}")
 
-    transcription = (
-        "Paciente relata cansaço frequente, medo e dificuldade para dormir."
-    )
+    recognizer = sr.Recognizer()
+
+    try:
+        with sr.AudioFile(str(audio_file)) as source:
+            audio = recognizer.record(source)
+
+        transcription = recognizer.recognize_google(audio, language="pt-BR")
+
+    except Exception:
+        transcription = "Não foi possível transcrever o áudio."
 
     risk_keywords = ["medo", "cansaço", "dificuldade para dormir", "ansiedade"]
 
