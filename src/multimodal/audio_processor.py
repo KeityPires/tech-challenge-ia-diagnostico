@@ -19,7 +19,20 @@ def analyze_audio(audio_path: str) -> dict:
     except Exception:
         transcription = "Não foi possível transcrever o áudio."
 
-    risk_keywords = ["medo", "cansaço", "dificuldade para dormir", "ansiedade"]
+    risk_keywords = ["medo",
+        "cansaço",
+        "cansada",
+        "ansiedade",
+        "ansiosa",
+        "angústia",
+        "agitada",
+        "não consigo dormir",
+        "não tenho vontade",
+        "indisposta",
+        "tristeza",
+        "vazio",
+        "apatia",
+        "muito mal"]
 
     found_flags = [
         keyword for keyword in risk_keywords
