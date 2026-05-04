@@ -56,7 +56,7 @@ def classify_emotional_categories(transcription: str) -> dict:
             "medo", "ameaça", "ameaca", "machucada", "machucado",
             "não posso falar", "nao posso falar", "ele não deixa",
             "ela não deixa", "tenho medo", "melhor eu ir", "não quero responder", "dor",
-            "fissura", "andência", "incômodo"
+            "fissura", "andência", "incômodo", "exagerando", "minha culpa", "culpa"
         ],
         "fadiga_hormonal_ou_cansaco": [
             "cansaço", "cansaco", "cansada", "cansado",
