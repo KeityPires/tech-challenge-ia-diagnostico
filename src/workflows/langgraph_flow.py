@@ -12,6 +12,10 @@ from src.multimodal.audio_processor import analyze_audio
 from src.multimodal.multimodal_fusion import calculate_multimodal_risk
 from src.multimodal.alert_generator import generate_alert
 
+import os
+import boto3
+from dotenv import load_dotenv
+
 
 class AssistantState(TypedDict, total=False):
     question: str
@@ -39,6 +43,10 @@ class AssistantState(TypedDict, total=False):
     audio_result: Dict[str, Any]
     multimodal_result: Dict[str, Any]
     multimodal_context: str
+
+    # fase 4 cloud
+    audio_s3_key: Optional[str]
+    video_s3_key: Optional[str]
 
 
 def guardrails_node(state: AssistantState) -> AssistantState:
@@ -157,6 +165,31 @@ Recent exams:
 
     except Exception as e:
         state["patient_context"] = f"Structured patient data could not be retrieved: {str(e)}"
+
+    return state
+
+def cloud_storage_node(state: AssistantState) -> AssistantState:
+    load_dotenv()
+
+    bucket = os.getenv("AWS_S3_BUCKET")
+    region = os.getenv("AWS_REGION")
+
+    s3 = boto3.client("s3", region_name=region)
+
+    os.makedirs("temp", exist_ok=True)
+
+    audio_s3_key = state.get("audio_s3_key")
+    video_s3_key = state.get("video_s3_key")
+
+    if audio_s3_key:
+        local_audio_path = os.path.join("temp", os.path.basename(audio_s3_key))
+        s3.download_file(bucket, audio_s3_key, local_audio_path)
+        state["audio_path"] = local_audio_path
+
+    if video_s3_key:
+        local_video_path = os.path.join("temp", os.path.basename(video_s3_key))
+        s3.download_file(bucket, video_s3_key, local_video_path)
+        state["video_path"] = local_video_path
 
     return state
 
@@ -300,6 +333,7 @@ def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_d
     graph.add_node("guardrails", guardrails_node)
     graph.add_node("retrieve", lambda state: retrieve_node(state, retriever))
     graph.add_node("patient_context", lambda state: patient_context_node(state, db_path))
+    graph.add_node("cloud_storage", cloud_storage_node)
     graph.add_node("video_analysis", video_analysis_node)
     graph.add_node("audio_analysis", audio_analysis_node)
     graph.add_node("multimodal_fusion", multimodal_fusion_node)
@@ -321,7 +355,8 @@ def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_d
     )
 
     graph.add_edge("retrieve", "patient_context")
-    graph.add_edge("patient_context", "video_analysis")
+    graph.add_edge("patient_context", "cloud_storage")
+    graph.add_edge("cloud_storage", "video_analysis")
     graph.add_edge("video_analysis", "audio_analysis")
     graph.add_edge("audio_analysis", "multimodal_fusion")
     graph.add_edge("multimodal_fusion", "merge_context")
