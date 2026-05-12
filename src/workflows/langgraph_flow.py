@@ -231,24 +231,59 @@ def multimodal_fusion_node(state: AssistantState) -> AssistantState:
     video_result = state.get("video_result", {})
     audio_result = state.get("audio_result", {})
 
-    multimodal_result = calculate_multimodal_risk(video_result, audio_result)
+    multimodal_result = calculate_multimodal_risk(
+        video_result,
+        audio_result
+    )
+
     alert_text = generate_alert(multimodal_result)
 
+    evidences = multimodal_result.get("evidences", [])
+    interpretations = multimodal_result.get("interpretation", [])
+    limitations = multimodal_result.get("limitations", [])
+    relevant_signals = multimodal_result.get("relevant_signals", [])
+
     state["multimodal_result"] = multimodal_result
+
     state["multimodal_context"] = f"""
-MULTIMODAL ANALYSIS:
-Video risk score: {multimodal_result.get("video_score")}
-Audio risk score: {multimodal_result.get("audio_score")}
-Final multimodal score: {multimodal_result.get("final_score")}
-Risk level: {multimodal_result.get("risk_level")}
-Alert generated: {multimodal_result.get("alert")}
+    ANÁLISE MULTIMODAL:
 
-Evidence:
-{chr(10).join(["- " + item for item in multimodal_result.get("evidences", [])])}
+    Score de risco do vídeo:
+    {multimodal_result.get("video_score")}
 
-Alert message:
-{alert_text}
-""".strip()
+    Score de risco do áudio:
+    {multimodal_result.get("audio_score")}
+
+    Score multimodal final:
+    {multimodal_result.get("final_score")}
+
+    Nível de risco:
+    {multimodal_result.get("risk_level")}
+
+    Alerta gerado:
+    {multimodal_result.get("alert")}
+
+    Estratégia de fusão:
+    {multimodal_result.get("fusion_strategy")}
+
+    Sinais relevantes identificados:
+    {chr(10).join(["- " + item for item in relevant_signals]) if relevant_signals else "- Nenhum sinal relevante identificado."}
+
+    Evidências multimodais:
+    {chr(10).join(["- " + item for item in evidences]) if evidences else "- Nenhuma evidência encontrada."}
+
+    Interpretação clínica educacional:
+    {chr(10).join(["- " + item for item in interpretations]) if interpretations else "- Sem interpretação disponível."}
+
+    Recomendação:
+    {multimodal_result.get("recommendation")}
+
+    Limitações da análise:
+    {chr(10).join(["- " + item for item in limitations]) if limitations else "- Sem limitações registradas."}
+
+    Mensagem automática de alerta:
+    {alert_text}
+    """.strip()
 
     return state
 
@@ -273,25 +308,37 @@ MEDICAL KNOWLEDGE RETRIEVED:
 
 def generate_node(state: AssistantState, llm) -> AssistantState:
     prompt = f"""
-You are a medical educational assistant focused on women's health, maternal health, psychological well-being and breast cancer information.
+    Você é um assistente educacional de apoio à triagem clínica em saúde da mulher.
 
-Use only the context below to answer the question.
-Prioritize patient-specific structured data when relevant.
-Do not invent information.
-If the context is insufficient, clearly say that the available sources are insufficient.
-Do not provide a definitive diagnosis.
-Do not prescribe treatment.
-Do not prescribe dosage.
-Always answer in a clear and educational tone.
+    Responda sempre em português do Brasil.
 
-Use multimodal analysis only as triage support, never as a definitive diagnosis.
+    Use somente o contexto abaixo para responder.
+    Não invente informações.
+    Não forneça diagnóstico definitivo.
+    Não prescreva tratamento.
+    Não prescreva dosagem.
+    A análise multimodal deve ser usada apenas como apoio à triagem, nunca como confirmação clínica.
 
-Context:
-{state.get("final_context", state.get("context", ""))}
+    Organize a resposta obrigatoriamente neste formato:
 
-Question:
-{state["question"]}
-"""
+    1. Resumo da avaliação
+    2. Evidências observadas
+    3. Nível de risco
+    4. Recomendação
+    5. Limitações da análise
+
+    Na seção de limitações, deixe claro que:
+    - o sistema não realiza diagnóstico;
+    - expressões faciais indicam apenas sinais aparentes;
+    - sinais de áudio e vídeo são evidências complementares;
+    - a avaliação profissional é necessária em caso de persistência ou agravamento dos sintomas.
+
+    Contexto:
+    {state.get("final_context", state.get("context", ""))}
+
+    Pergunta:
+    {state["question"]}
+    """
 
     response = llm.invoke(prompt)
     answer = response.content if hasattr(response, "content") else str(response)
