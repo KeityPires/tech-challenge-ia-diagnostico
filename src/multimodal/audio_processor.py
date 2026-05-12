@@ -2,40 +2,73 @@ from pathlib import Path
 import wave
 import audioop
 import speech_recognition as sr
+import librosa
+import numpy as np
 
 
 def get_voice_features(audio_path: str) -> dict:
     audio_file = Path(audio_path)
 
     try:
-        with wave.open(str(audio_file), "rb") as wav:
-            frames = wav.readframes(wav.getnframes())
-            sample_width = wav.getsampwidth()
-            frame_rate = wav.getframerate()
-            frame_count = wav.getnframes()
-            duration_seconds = frame_count / frame_rate if frame_rate else 0
-            rms = audioop.rms(frames, sample_width)
+        y, sr_rate = librosa.load(str(audio_file), sr=None)
 
-        if rms > 1800:
+        duration_seconds = librosa.get_duration(y=y, sr=sr_rate)
+
+        rms = librosa.feature.rms(y=y)[0]
+        mean_energy = float(np.mean(rms))
+
+        pitches, magnitudes = librosa.piptrack(y=y, sr=sr_rate)
+        pitch_values = pitches[pitches > 0]
+
+        mean_pitch = float(np.mean(pitch_values)) if len(pitch_values) > 0 else 0
+        pitch_variation = float(np.std(pitch_values)) if len(pitch_values) > 0 else 0
+
+        non_silent_intervals = librosa.effects.split(y, top_db=20)
+        non_silent_samples = sum(end - start for start, end in non_silent_intervals)
+        silence_ratio = 1 - (non_silent_samples / len(y)) if len(y) > 0 else 0
+
+        if mean_energy > 0.05:
             voice_intensity = "alta"
-        elif rms > 800:
+        elif mean_energy > 0.02:
             voice_intensity = "moderada"
         else:
             voice_intensity = "baixa"
 
+        tone_flags = []
+
+        if pitch_variation > 70:
+            tone_flags.append("voice_instability")
+
+        if mean_pitch > 220:
+            tone_flags.append("elevated_voice_tension")
+
+        if silence_ratio > 0.35:
+            tone_flags.append("speech_hesitation")
+
+        if mean_energy < 0.02:
+            tone_flags.append("low_voice_energy")
+
         return {
             "duration_seconds": round(duration_seconds, 2),
-            "rms_energy": rms,
-            "voice_intensity": voice_intensity
+            "mean_energy": round(mean_energy, 4),
+            "mean_pitch": round(mean_pitch, 2),
+            "pitch_variation": round(pitch_variation, 2),
+            "silence_ratio": round(float(silence_ratio), 2),
+            "voice_intensity": voice_intensity,
+            "tone_flags": tone_flags
         }
 
-    except Exception:
+    except Exception as e:
         return {
             "duration_seconds": None,
-            "rms_energy": None,
-            "voice_intensity": "indisponível"
+            "mean_energy": None,
+            "mean_pitch": None,
+            "pitch_variation": None,
+            "silence_ratio": None,
+            "voice_intensity": "indisponível",
+            "tone_flags": [],
+            "error": str(e)
         }
-
 
 def classify_emotional_categories(transcription: str) -> dict:
     text = transcription.lower()
@@ -87,7 +120,7 @@ def classify_emotional_categories(transcription: str) -> dict:
 
 def calculate_audio_risk(detected_categories: dict, voice_features: dict) -> float:
     category_count = len(detected_categories)
-    score = 0.25 + (0.15 * category_count)
+    score = 0.15 + (0.15 * category_count)
 
     if "sinais_de_violencia_ou_medo" in detected_categories:
         score += 0.2
@@ -95,11 +128,24 @@ def calculate_audio_risk(detected_categories: dict, voice_features: dict) -> flo
     if "depressao_pos_parto_ou_sofrimento_emocional" in detected_categories:
         score += 0.2
 
+    tone_flags = voice_features.get("tone_flags", [])
+
+    if "voice_instability" in tone_flags:
+        score += 0.15
+
+    if "elevated_voice_tension" in tone_flags:
+        score += 0.15
+
+    if "speech_hesitation" in tone_flags:
+        score += 0.15
+
+    if "low_voice_energy" in tone_flags:
+        score += 0.1
+
     if voice_features.get("voice_intensity") == "alta":
         score += 0.1
 
     return min(score, 1.0)
-
 
 def build_audio_interpretation(detected_categories: dict, flags: list) -> str:
     if not detected_categories:
@@ -139,7 +185,8 @@ def analyze_audio(audio_path: str) -> dict:
     emotional_result = classify_emotional_categories(transcription)
 
     detected_categories = emotional_result["detected_categories"]
-    found_flags = emotional_result["flags"]
+    found_flags = emotional_result["flags"] + voice_features.get("tone_flags", [])
+    found_flags = list(dict.fromkeys(found_flags))
 
     risk_score = calculate_audio_risk(detected_categories, voice_features)
 
