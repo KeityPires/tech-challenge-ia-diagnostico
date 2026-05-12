@@ -42,7 +42,13 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         "trauma",
         "medo",
         "choro",
-        "hesitacao"
+        "hesitacao",
+        "persistent_fear",
+        "persistent_sadness",
+        "persistent_tension",
+        "persistent_confusion",
+        "emotional_variation_detected",
+        "face_not_visible",
     }
 
     relevant_signals = [
