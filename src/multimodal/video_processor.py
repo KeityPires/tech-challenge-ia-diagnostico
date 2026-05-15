@@ -72,10 +72,16 @@ def analyze_video(video_path: str) -> dict:
         }
 
     fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
-    step = fps * 5
+
+    # Para vídeos curtos, como RAVDESS, analisamos frames com maior frequência.
+    sample_interval_seconds = 0.5
+    step = max(1, int(fps * sample_interval_seconds))
+
+    max_frames_to_analyze = 20
 
     frame_id = 0
     frames_analyzed = 0
+    frames_with_faces = 0
 
     person_detected = False
     total_person_detections = 0
@@ -92,10 +98,13 @@ def analyze_video(video_path: str) -> dict:
             break
 
         if frame_id % step == 0:
-            frames_analyzed += 1
+            if frames_analyzed >= max_frames_to_analyze:
+                break
 
+            frames_analyzed += 1
             people_in_frame = 0
 
+            # YOLOv8: detecção de presença humana.
             yolo_results = yolo_model(frame, verbose=False)
 
             for r in yolo_results:
@@ -108,21 +117,25 @@ def analyze_video(video_path: str) -> dict:
                         people_in_frame += 1
                         total_person_detections += 1
 
-            max_people_in_frame = max(max_people_in_frame, people_in_frame)
+            max_people_in_frame = max(
+                max_people_in_frame,
+                people_in_frame
+            )
 
+            # AWS Rekognition: emoções faciais aparentes.
             success, encoded_image = cv2.imencode(".jpg", frame)
 
             if success:
                 try:
                     response = rekognition.detect_faces(
                         Image={"Bytes": encoded_image.tobytes()},
-                        Attributes=["ALL"],
-                        QualityFilter="AUTO"
+                        Attributes=["ALL"]
                     )
 
                     faces = response.get("FaceDetails", [])
 
                     if faces:
+                        frames_with_faces += 1
                         faces_detected += len(faces)
 
                         for face in faces:
@@ -137,7 +150,9 @@ def analyze_video(video_path: str) -> dict:
                                 emotion_type = dominant_emotion["Type"]
                                 confidence = dominant_emotion["Confidence"]
 
-                                if confidence >= 70:
+                                # Limiar menor para datasets curtos/sintéticos,
+                                # como RAVDESS.
+                                if confidence >= 50:
                                     emotions_detected.append(emotion_type)
                                     emotion_confidences.append(
                                         round(confidence, 2)
@@ -233,6 +248,10 @@ def analyze_video(video_path: str) -> dict:
         flags.append("emotional_variation_detected")
         video_score += 0.05
 
+    # Se não houve nenhuma face detectada, não atribuímos risco emocional visual.
+    if faces_detected == 0:
+        video_score = 0
+
     video_score = round(min(video_score, 1.0), 2)
 
     if video_score >= 0.75:
@@ -291,9 +310,22 @@ def analyze_video(video_path: str) -> dict:
             "O vídeo apresentou múltiplas pessoas no mesmo frame, indicando maior complexidade contextual da cena."
         )
 
-    if not visual_interpretation:
+    if faces_detected > 0 and not any(
+        flag in flags
+        for flag in [
+            "fear_expression",
+            "sad_expression",
+            "angry_expression",
+            "disgusted_expression",
+            "confused_expression",
+            "persistent_fear",
+            "persistent_sadness",
+            "persistent_tension",
+            "persistent_confusion"
+        ]
+    ):
         visual_interpretation.append(
-            "A análise visual não identificou sinais relevantes de desconforto emocional."
+            "A análise facial não identificou sinais visuais relevantes de desconforto emocional."
         )
 
     limitations = [
@@ -301,7 +333,8 @@ def analyze_video(video_path: str) -> dict:
         "O sistema não realiza diagnóstico médico ou psicológico.",
         "Os sinais visuais devem ser interpretados apenas como apoio à triagem.",
         "Iluminação, ângulo da câmera, qualidade do vídeo e oclusões podem afetar os resultados.",
-        "O YOLOv8 utilizado detecta presença humana, mas não substitui avaliação clínica especializada."
+        "O YOLOv8 utilizado detecta presença humana, mas não substitui avaliação clínica especializada.",
+        "Em vídeos curtos ou bases sintéticas como RAVDESS, a emoção pode variar rapidamente e a análise depende dos frames amostrados."
     ]
 
     return {
@@ -314,6 +347,7 @@ def analyze_video(video_path: str) -> dict:
         "metadata": {
             **metadata,
             "frames_analyzed": frames_analyzed,
+            "frames_with_faces": frames_with_faces,
             "faces_detected": faces_detected,
             "person_detected": person_detected,
             "total_person_detections": total_person_detections,
@@ -324,6 +358,6 @@ def analyze_video(video_path: str) -> dict:
             "emotion_confidences": emotion_confidences,
             "cloud_service": "AWS Rekognition",
             "visual_model": "YOLOv8",
-            "analysis_strategy": "frame_sampling_every_5_seconds"
+            "analysis_strategy": "frame_sampling_every_0_5_seconds_max_20_frames"
         }
     }

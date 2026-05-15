@@ -128,30 +128,39 @@ def classify_emotional_categories(transcription: str) -> dict:
 
 def calculate_audio_risk(detected_categories: dict, voice_features: dict) -> float:
     category_count = len(detected_categories)
-    score = 0.15 + (0.15 * category_count)
+
+    score = 0.0
+
+    if category_count > 0:
+        score += 0.20 + (0.12 * category_count)
 
     if "sinais_de_violencia_ou_medo" in detected_categories:
-        score += 0.2
+        score += 0.25
 
     if "depressao_pos_parto_ou_sofrimento_emocional" in detected_categories:
-        score += 0.2
+        score += 0.20
 
     tone_flags = voice_features.get("tone_flags", [])
 
+    # Sinais acústicos isolados devem ter peso menor
     if "voice_instability" in tone_flags:
-        score += 0.15
+        score += 0.07
 
     if "elevated_voice_tension" in tone_flags:
-        score += 0.15
+        score += 0.07
 
     if "speech_hesitation" in tone_flags:
-        score += 0.15
+        score += 0.06
 
     if "low_voice_energy" in tone_flags:
-        score += 0.1
+        score += 0.04
 
     if voice_features.get("voice_intensity") == "alta":
-        score += 0.1
+        score += 0.05
+
+    # Se não houve nenhuma categoria textual, limita o score acústico
+    if category_count == 0:
+        score = min(score, 0.35)
 
     return min(score, 1.0)
 
@@ -162,7 +171,7 @@ def build_audio_interpretation(detected_categories: dict, flags: list, voice_fea
     voice_profile = voice_features.get(
         "estimated_voice_profile",
         "indefinido"
-    )   
+    )
 
     voice_intensity = voice_features.get(
         "voice_intensity",
@@ -179,7 +188,15 @@ def build_audio_interpretation(detected_categories: dict, flags: list, voice_fea
         0
     )
 
-    # perfil vocal
+    tone_flags = voice_features.get(
+        "tone_flags",
+        []
+    )
+
+    has_textual_categories = bool(detected_categories)
+    has_acoustic_flags = bool(tone_flags)
+
+    # perfil vocal estimado
     if voice_profile == "feminina":
         interpretation_parts.append(
             "O perfil vocal estimado é compatível com voz feminina."
@@ -190,8 +207,13 @@ def build_audio_interpretation(detected_categories: dict, flags: list, voice_fea
             "O perfil vocal estimado é compatível com voz masculina."
         )
 
-    # categorias emocionais
-    if detected_categories:
+    else:
+        interpretation_parts.append(
+            "Não foi possível estimar o perfil vocal com segurança."
+        )
+
+    # categorias emocionais pela transcrição
+    if has_textual_categories:
         categories_text = ", ".join(
             detected_categories.keys()
         )
@@ -200,57 +222,82 @@ def build_audio_interpretation(detected_categories: dict, flags: list, voice_fea
             f"A análise textual identificou categorias associadas a {categories_text}."
         )
 
-    # sinais vocais
-    if "voice_instability" in flags:
+        flags_text = ", ".join(flags)
+
+        if flags_text:
+            interpretation_parts.append(
+                f"Os principais indicadores textuais e vocais encontrados foram: {flags_text}."
+            )
+
+    else:
         interpretation_parts.append(
-            "Foram observadas oscilações vocais compatíveis com instabilidade emocional ou tensão."
+            "Não foram identificadas palavras-chave clínicas de alerta na transcrição."
         )
 
-    if "speech_hesitation" in flags:
+    # aviso específico para bases como RAVDESS
+    if not has_textual_categories and has_acoustic_flags:
         interpretation_parts.append(
-            "Foram identificados sinais de hesitação na fala."
-        )
-
-    if "elevated_voice_tension" in flags:
-        interpretation_parts.append(
-            "A análise acústica identificou possível tensão vocal."
-        )
-
-    if "low_voice_energy" in flags:
-        interpretation_parts.append(
-            "A intensidade vocal reduzida pode estar associada a fadiga ou cansaço."
+            "Os sinais observados vieram principalmente de características acústicas da voz, "
+            "como variação de pitch, pausas, energia ou intensidade vocal. "
+            "Como a transcrição não contém termos clínicos de alerta, esses sinais devem ser tratados "
+            "como evidências complementares de baixa confiança."
         )
 
     # intensidade geral
     interpretation_parts.append(
-        f"A intensidade vocal identificada foi classificada como {voice_intensity}."
+        f"A intensidade vocal foi classificada como {voice_intensity}."
     )
+
+    # sinais vocais com linguagem mais cautelosa
+    if "voice_instability" in flags:
+        interpretation_parts.append(
+            "Foram registradas oscilações vocais, que podem indicar variação emocional, "
+            "mas isoladamente não confirmam ansiedade ou tensão."
+        )
+
+    if "speech_hesitation" in flags:
+        interpretation_parts.append(
+            "Foram identificadas pausas ou hesitações na fala, interpretadas apenas como sinal acústico complementar."
+        )
+
+    if "elevated_voice_tension" in flags:
+        interpretation_parts.append(
+            "A análise acústica registrou possível tensão vocal, sem confirmação clínica isolada."
+        )
+
+    if "low_voice_energy" in flags:
+        interpretation_parts.append(
+            "A energia vocal reduzida pode estar relacionada a calma, cansaço ou baixa intensidade de fala, "
+            "não sendo suficiente para indicar fadiga clínica isoladamente."
+        )
 
     # variação vocal
     if pitch_variation and pitch_variation > 70:
         interpretation_parts.append(
-            "A elevada variação do pitch pode indicar agitação ou ansiedade."
+            "A variação do pitch foi elevada, sendo considerada um sinal acústico complementar, "
+            "mas não deve ser interpretada isoladamente como ansiedade."
         )
 
     # pausas/silêncio
     if silence_ratio and silence_ratio > 0.35:
         interpretation_parts.append(
-            "A presença de pausas frequentes pode indicar insegurança ou desconforto emocional."
+            "A proporção de silêncio ou pausas foi elevada, podendo refletir ritmo de fala, gravação, "
+            "interpretação do ator ou hesitação."
         )
 
     # fallback
-    if not interpretation_parts:
+    if not has_textual_categories and not has_acoustic_flags:
         interpretation_parts.append(
-            "Não foram identificados sinais emocionais relevantes na análise de áudio."
+            "Não foram identificados sinais emocionais relevantes na análise textual ou acústica do áudio."
         )
 
     # conclusão segura
     interpretation_parts.append(
-        "Os sinais identificados não representam diagnóstico médico ou psicológico, sendo utilizados apenas como apoio à triagem preventiva."
+        "Os sinais identificados não representam diagnóstico médico ou psicológico. "
+        "A análise de áudio é usada apenas como apoio à triagem preventiva e deve ser interpretada junto com outras evidências."
     )
 
     return " ".join(interpretation_parts)
-
 
 def analyze_audio(audio_path: str, language: str = "pt-BR") -> dict:
     audio_file = Path(audio_path)
