@@ -19,9 +19,16 @@ def get_voice_features(audio_path: str) -> dict:
 
         pitches, magnitudes = librosa.piptrack(y=y, sr=sr_rate)
         pitch_values = pitches[pitches > 0]
+        pitch_variation = float(np.std(pitch_values)) if len(pitch_values) > 0 else 0
 
         mean_pitch = float(np.mean(pitch_values)) if len(pitch_values) > 0 else 0
-        pitch_variation = float(np.std(pitch_values)) if len(pitch_values) > 0 else 0
+
+        if mean_pitch >= 165:
+            estimated_voice_profile = "feminina"
+        elif mean_pitch > 0:
+            estimated_voice_profile = "masculina"
+        else:
+            estimated_voice_profile = "indefinido"
 
         non_silent_intervals = librosa.effects.split(y, top_db=20)
         non_silent_samples = sum(end - start for start, end in non_silent_intervals)
@@ -55,7 +62,8 @@ def get_voice_features(audio_path: str) -> dict:
             "pitch_variation": round(pitch_variation, 2),
             "silence_ratio": round(float(silence_ratio), 2),
             "voice_intensity": voice_intensity,
-            "tone_flags": tone_flags
+            "tone_flags": tone_flags,
+            "estimated_voice_profile": estimated_voice_profile,
         }
 
     except Exception as e:
@@ -147,24 +155,104 @@ def calculate_audio_risk(detected_categories: dict, voice_features: dict) -> flo
 
     return min(score, 1.0)
 
-def build_audio_interpretation(detected_categories: dict, flags: list) -> str:
-    if not detected_categories:
-        return (
-            "Não foram identificados sinais emocionais relevantes na transcrição. "
-            "A recomendação é manter acompanhamento regular."
-        )
+def build_audio_interpretation(detected_categories: dict, flags: list, voice_features: dict) -> str:
 
-    categories_text = ", ".join(detected_categories.keys())
-    flags_text = ", ".join(flags)
+    interpretation_parts = []
 
-    return (
-        f"A análise identificou categorias associadas a {categories_text}. "
-        f"Os principais indicadores encontrados foram: {flags_text}. "
-        "Esses sinais não representam diagnóstico, mas podem indicar necessidade de atenção especializada."
+    voice_profile = voice_features.get(
+        "estimated_voice_profile",
+        "indefinido"
+    )   
+
+    voice_intensity = voice_features.get(
+        "voice_intensity",
+        "indefinida"
     )
 
+    pitch_variation = voice_features.get(
+        "pitch_variation",
+        0
+    )
 
-def analyze_audio(audio_path: str) -> dict:
+    silence_ratio = voice_features.get(
+        "silence_ratio",
+        0
+    )
+
+    # perfil vocal
+    if voice_profile == "feminina":
+        interpretation_parts.append(
+            "O perfil vocal estimado é compatível com voz feminina."
+        )
+
+    elif voice_profile == "masculina":
+        interpretation_parts.append(
+            "O perfil vocal estimado é compatível com voz masculina."
+        )
+
+    # categorias emocionais
+    if detected_categories:
+        categories_text = ", ".join(
+            detected_categories.keys()
+        )
+
+        interpretation_parts.append(
+            f"A análise textual identificou categorias associadas a {categories_text}."
+        )
+
+    # sinais vocais
+    if "voice_instability" in flags:
+        interpretation_parts.append(
+            "Foram observadas oscilações vocais compatíveis com instabilidade emocional ou tensão."
+        )
+
+    if "speech_hesitation" in flags:
+        interpretation_parts.append(
+            "Foram identificados sinais de hesitação na fala."
+        )
+
+    if "elevated_voice_tension" in flags:
+        interpretation_parts.append(
+            "A análise acústica identificou possível tensão vocal."
+        )
+
+    if "low_voice_energy" in flags:
+        interpretation_parts.append(
+            "A intensidade vocal reduzida pode estar associada a fadiga ou cansaço."
+        )
+
+    # intensidade geral
+    interpretation_parts.append(
+        f"A intensidade vocal identificada foi classificada como {voice_intensity}."
+    )
+
+    # variação vocal
+    if pitch_variation and pitch_variation > 70:
+        interpretation_parts.append(
+            "A elevada variação do pitch pode indicar agitação ou ansiedade."
+        )
+
+    # pausas/silêncio
+    if silence_ratio and silence_ratio > 0.35:
+        interpretation_parts.append(
+            "A presença de pausas frequentes pode indicar insegurança ou desconforto emocional."
+        )
+
+    # fallback
+    if not interpretation_parts:
+        interpretation_parts.append(
+            "Não foram identificados sinais emocionais relevantes na análise de áudio."
+        )
+
+    # conclusão segura
+    interpretation_parts.append(
+        "Os sinais identificados não representam diagnóstico médico ou psicológico, sendo utilizados apenas como apoio à triagem preventiva."
+    )
+
+    return " ".join(interpretation_parts)
+
+
+def analyze_audio(audio_path: str, language: str = "pt-BR") -> dict:
     audio_file = Path(audio_path)
 
     if not audio_file.exists():
@@ -176,19 +264,37 @@ def analyze_audio(audio_path: str) -> dict:
         with sr.AudioFile(str(audio_file)) as source:
             audio = recognizer.record(source)
 
-        transcription = recognizer.recognize_google(audio, language="pt-BR")
+        transcription = recognizer.recognize_google(audio, language=language)
 
     except Exception:
         transcription = "Não foi possível transcrever o áudio."
 
     voice_features = get_voice_features(str(audio_file))
+
+    voice_profile = voice_features.get(
+        "estimated_voice_profile",
+        "indefinido"
+    )
+
+    if voice_profile == "feminina":
+        interpretation.append(
+        "O perfil vocal estimado é compatível com voz feminina."
+    )
+    if voice_profile == "feminina":
+        interpretation.append(
+        "O perfil vocal estimado é compatível com voz feminina."
+        )
+    elif voice_profile == "masculina":
+        interpretation.append(
+        "O perfil vocal estimado é compatível com voz masculina."
+    )    
     emotional_result = classify_emotional_categories(transcription)
 
     detected_categories = emotional_result["detected_categories"]
     found_flags = emotional_result["flags"] + voice_features.get("tone_flags", [])
     found_flags = list(dict.fromkeys(found_flags))
 
-    risk_score = calculate_audio_risk(detected_categories, voice_features)
+    risk_score = calculate_audio_risk(detected_categories, voice_features, voice_features)
 
     if risk_score >= 0.7:
         risk_level = "alto"
@@ -200,8 +306,8 @@ def analyze_audio(audio_path: str) -> dict:
         risk_level = "baixo"
         recommendation = "Recomenda-se acompanhamento regular."
 
-    interpretation = build_audio_interpretation(detected_categories, found_flags)
-
+    interpretation = build_audio_interpretation(detected_categories, found_flags, voice_features)
+    
     return {
         "modality": "audio",
         "risk_score": round(risk_score, 2),
