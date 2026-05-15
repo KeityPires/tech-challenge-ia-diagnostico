@@ -28,12 +28,16 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
 
     final_score = round(final_score, 2)
 
-    # Regras de reforço para sinais emocionalmente relevantes
     high_risk_flags = {
         "fear_expression",
         "angry_expression",
         "sad_expression",
         "confused_expression",
+        "persistent_fear",
+        "persistent_sadness",
+        "persistent_tension",
+        "persistent_confusion",
+        "emotional_variation_detected",
         "ansiosa",
         "agitada",
         "cansada",
@@ -42,13 +46,14 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         "trauma",
         "medo",
         "choro",
-        "hesitacao",
-        "persistent_fear",
-        "persistent_sadness",
-        "persistent_tension",
-        "persistent_confusion",
-        "emotional_variation_detected",
-        "face_not_visible",
+        "hesitacao"
+    }
+
+    weak_acoustic_flags = {
+        "voice_instability",
+        "elevated_voice_tension",
+        "speech_hesitation",
+        "low_voice_energy"
     }
 
     relevant_signals = [
@@ -65,11 +70,17 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
     else:
         risk_level = "not_provided"
 
-    # se houver muitos sinais relevantes mesmo com score moderado, eleva para médio
     if risk_level == "baixo" and len(relevant_signals) >= 3:
         risk_level = "medio"
 
-    # Alerta apenas para alto ou médio com múltiplas evidências
+    display_evidences = evidences
+
+    if risk_level == "baixo":
+        display_evidences = [
+            flag for flag in evidences
+            if flag not in weak_acoustic_flags
+        ]
+
     alert = risk_level == "alto" or (
         risk_level == "medio" and len(relevant_signals) >= 4
     )
@@ -90,9 +101,13 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
             interpretation.append(
                 "A análise de áudio apresentou sinais moderados que podem indicar desconforto emocional."
             )
+        elif audio_score > 0:
+            interpretation.append(
+                "A análise de áudio apresentou baixo nível de risco. Os sinais acústicos detectados foram considerados fracos e complementares, sem evidência textual clínica de alerta."
+            )
         else:
             interpretation.append(
-                "A análise de áudio apresentou baixo nível de risco."
+                "A análise de áudio não apresentou sinais relevantes de risco."
             )
 
     if has_video:
@@ -104,40 +119,45 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
             interpretation.append(
                 "A análise de vídeo apresentou sinais visuais leves ou moderados, usados como evidência complementar."
             )
-        else:
+        elif video_score > 0:
             interpretation.append(
                 "A análise de vídeo apresentou baixo nível de risco visual."
             )
+        else:
+            interpretation.append(
+                "A análise de vídeo não apresentou sinais visuais relevantes de risco."
+            )
 
-    if "fear_expression" in evidences:
-        interpretation.append(
-            "Foram observadas expressões aparentes associadas a medo, que devem ser interpretadas com cautela."
-        )
+    if risk_level != "baixo":
+        if "fear_expression" in evidences:
+            interpretation.append(
+                "Foram observadas expressões aparentes associadas a medo, que devem ser interpretadas com cautela."
+            )
 
-    if "sad_expression" in evidences:
-        interpretation.append(
-            "Foram observadas expressões aparentes associadas a tristeza."
-        )
+        if "sad_expression" in evidences:
+            interpretation.append(
+                "Foram observadas expressões aparentes associadas a tristeza."
+            )
 
-    if "angry_expression" in evidences:
-        interpretation.append(
-            "Foram observadas expressões aparentes associadas a tensão ou raiva."
-        )
+        if "angry_expression" in evidences:
+            interpretation.append(
+                "Foram observadas expressões aparentes associadas a tensão ou raiva."
+            )
 
-    if "confused_expression" in evidences:
-        interpretation.append(
-            "Foram observadas expressões aparentes associadas a confusão ou insegurança."
-        )
+        if "confused_expression" in evidences:
+            interpretation.append(
+                "Foram observadas expressões aparentes associadas a confusão ou insegurança."
+            )
 
-    if "ansiosa" in evidences or "agitada" in evidences:
-        interpretation.append(
-            "O áudio indicou sinais compatíveis com ansiedade ou agitação."
-        )
+        if "ansiosa" in evidences or "agitada" in evidences:
+            interpretation.append(
+                "O áudio indicou sinais compatíveis com ansiedade ou agitação."
+            )
 
-    if "cansada" in evidences or "fadiga_hormonal_ou_cansaco" in evidences:
-        interpretation.append(
-            "O áudio indicou sinais compatíveis com cansaço ou fadiga."
-        )
+        if "cansada" in evidences or "fadiga_hormonal_ou_cansaco" in evidences:
+            interpretation.append(
+                "O áudio indicou sinais compatíveis com cansaço ou fadiga."
+            )
 
     recommendation = ""
 
@@ -153,8 +173,8 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         )
     elif risk_level == "baixo":
         recommendation = (
-            "Não foram identificados sinais críticos, mas recomenda-se manter observação "
-            "e buscar orientação profissional em caso de agravamento."
+            "Não foram identificados sinais críticos. Recomenda-se manter observação "
+            "e buscar orientação profissional apenas em caso de agravamento ou persistência dos sintomas."
         )
     else:
         recommendation = (
@@ -166,6 +186,7 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         "risk_level": risk_level,
         "alert": alert,
         "evidences": evidences,
+        "display_evidences": display_evidences,
         "relevant_signals": relevant_signals,
         "video_score": video_score,
         "audio_score": audio_score,
