@@ -271,30 +271,17 @@ def analyze_audio(audio_path: str, language: str = "pt-BR") -> dict:
 
     voice_features = get_voice_features(str(audio_file))
 
-    voice_profile = voice_features.get(
-        "estimated_voice_profile",
-        "indefinido"
-    )
-
-    if voice_profile == "feminina":
-        interpretation.append(
-        "O perfil vocal estimado é compatível com voz feminina."
-    )
-    if voice_profile == "feminina":
-        interpretation.append(
-        "O perfil vocal estimado é compatível com voz feminina."
-        )
-    elif voice_profile == "masculina":
-        interpretation.append(
-        "O perfil vocal estimado é compatível com voz masculina."
-    )    
     emotional_result = classify_emotional_categories(transcription)
 
     detected_categories = emotional_result["detected_categories"]
+
     found_flags = emotional_result["flags"] + voice_features.get("tone_flags", [])
     found_flags = list(dict.fromkeys(found_flags))
 
-    risk_score = calculate_audio_risk(detected_categories, voice_features, voice_features)
+    risk_score = calculate_audio_risk(
+        detected_categories,
+        voice_features
+    )
 
     if risk_score >= 0.7:
         risk_level = "alto"
@@ -306,8 +293,12 @@ def analyze_audio(audio_path: str, language: str = "pt-BR") -> dict:
         risk_level = "baixo"
         recommendation = "Recomenda-se acompanhamento regular."
 
-    interpretation = build_audio_interpretation(detected_categories, found_flags, voice_features)
-    
+    interpretation = build_audio_interpretation(
+        detected_categories,
+        found_flags,
+        voice_features
+    )
+
     return {
         "modality": "audio",
         "risk_score": round(risk_score, 2),

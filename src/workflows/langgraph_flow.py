@@ -222,8 +222,12 @@ def audio_analysis_node(state: AssistantState) -> AssistantState:
             "transcription": ""
         }
         return state
+    language = state.get("audio_language", "pt-BR")
 
-    state["audio_result"] = analyze_audio(audio_path)
+    state["audio_result"] = analyze_audio(
+        audio_path,
+        language=language
+    )
     return state
 
 
