@@ -246,6 +246,7 @@ def multimodal_fusion_node(state: AssistantState) -> AssistantState:
     interpretations = multimodal_result.get("interpretation", [])
     limitations = multimodal_result.get("limitations", [])
     relevant_signals = multimodal_result.get("relevant_signals", [])
+    evidences = multimodal_result.get("display_evidences", [])
 
     state["multimodal_result"] = multimodal_result
 

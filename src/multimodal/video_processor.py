@@ -150,13 +150,27 @@ def analyze_video(video_path: str) -> dict:
                                 emotion_type = dominant_emotion["Type"]
                                 confidence = dominant_emotion["Confidence"]
 
-                                # Limiar menor para datasets curtos/sintéticos,
-                                # como RAVDESS.
+                                # guarda emoção dominante
                                 if confidence >= 50:
                                     emotions_detected.append(emotion_type)
-                                    emotion_confidences.append(
-                                        round(confidence, 2)
-                                    )
+                                    emotion_confidences.append(round(confidence, 2))
+
+                                # guarda emoções negativas relevantes mesmo que não sejam dominantes
+                                negative_emotions = {
+                                    "SAD",
+                                    "FEAR",
+                                    "ANGRY",
+                                    "CONFUSED",
+                                    "DISGUSTED"
+                                }
+
+                                for emotion in emotions:
+                                    emotion_type = emotion["Type"]
+                                    confidence = emotion["Confidence"]
+
+                                    if emotion_type in negative_emotions and confidence >= 20:
+                                        emotions_detected.append(emotion_type)
+                                        emotion_confidences.append(round(confidence, 2))
 
                 except Exception:
                     emotions_detected.append("UNKNOWN")
