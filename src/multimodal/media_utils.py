@@ -2,11 +2,7 @@ from pathlib import Path
 from moviepy import VideoFileClip
 
 
-def extract_audio_from_video(
-    video_path: str,
-    output_audio_path: str | None = None,
-    audio_format: str = "wav"
-) -> str:
+def extract_audio_from_video(video_path: str, output_audio_path: str | None = None, audio_format: str = "wav") -> str | None:
     video_file = Path(video_path)
 
     if not video_file.exists():
@@ -27,17 +23,17 @@ def extract_audio_from_video(
 
     video = VideoFileClip(str(video_file))
 
-    if video.audio is None:
-        video.close()
-        raise ValueError(
-            "O vídeo não possui faixa de áudio."
+    try:
+        if video.audio is None:
+            print("O vídeo não possui faixa de áudio.")
+            return None
+
+        video.audio.write_audiofile(
+            str(output_audio_file),
+            logger=None
         )
 
-    video.audio.write_audiofile(
-        str(output_audio_file),
-        logger=None
-    )
+        return str(output_audio_file)
 
-    video.close()
-
-    return str(output_audio_file)
+    finally:
+        video.close()
