@@ -39,15 +39,14 @@ def extract_video_metadata(video_path: str) -> dict:
         "duration_seconds": round(duration_seconds, 2)
     }
 
-
 def analyze_body_posture(frame, pose_model) -> dict:
-   
     posture_flags = []
-    posture_score = 0.0
     posture_interpretation = []
 
     try:
         results = pose_model(frame, verbose=False)
+
+        frame_height, frame_width = frame.shape[:2]
 
         for r in results:
             if r.keypoints is None:
@@ -62,29 +61,41 @@ def analyze_body_posture(frame, pose_model) -> dict:
                     left_hip = person[11]
                     right_hip = person[12]
 
-                    shoulder_center_y = (
-                        left_shoulder[1] + right_shoulder[1]
-                    ) / 2
+                    points = [
+                        left_shoulder,
+                        right_shoulder,
+                        left_hip,
+                        right_hip
+                    ]
 
-                    hip_center_y = (
-                        left_hip[1] + right_hip[1]
-                    ) / 2
+                    if any(point[0] <= 0 or point[1] <= 0 for point in points):
+                        continue
+
+                    shoulder_width = abs(
+                        right_shoulder[0] - left_shoulder[0]
+                    )
+
+                    shoulder_height_diff = abs(
+                        right_shoulder[1] - left_shoulder[1]
+                    )
 
                     torso_height = abs(
-                        shoulder_center_y - hip_center_y
+                        ((left_hip[1] + right_hip[1]) / 2)
+                        -
+                        ((left_shoulder[1] + right_shoulder[1]) / 2)
                     )
 
-                    shoulder_difference = abs(
-                        left_shoulder[1] - right_shoulder[1]
-                    )
+                    if shoulder_width <= 0 or torso_height <= 0:
+                        continue
 
-                    if torso_height < 80:
-                        posture_flags.append("possible_retracted_posture")
-                        posture_score += 0.08
+                    shoulder_tilt_ratio = shoulder_height_diff / shoulder_width
+                    torso_ratio = torso_height / frame_height
 
-                    if shoulder_difference > 40:
+                    if shoulder_tilt_ratio > 0.45:
                         posture_flags.append("possible_body_tension")
-                        posture_score += 0.06
+
+                    if torso_ratio < 0.14:
+                        posture_flags.append("possible_retracted_posture")
 
                 except Exception:
                     continue
@@ -93,30 +104,26 @@ def analyze_body_posture(frame, pose_model) -> dict:
         return {
             "posture_flags": [],
             "posture_score": 0.0,
-            "posture_interpretation": [
-                "Não foi possível realizar análise de postura corporal neste frame."
-            ]
+            "posture_interpretation": []
         }
 
     posture_flags = list(dict.fromkeys(posture_flags))
-    posture_score = round(min(posture_score, 0.15), 2)
-
-    if "possible_retracted_posture" in posture_flags:
-        posture_interpretation.append(
-            "Foram observados possíveis sinais de postura retraída ou curvada, tratados apenas como evidência complementar."
-        )
 
     if "possible_body_tension" in posture_flags:
         posture_interpretation.append(
-            "Foram observados possíveis sinais de tensão corporal, tratados apenas como evidência complementar."
+            "Foram observados possíveis sinais posturais de tensão corporal, tratados apenas como evidência complementar e exploratória."
+        )
+
+    if "possible_retracted_posture" in posture_flags:
+        posture_interpretation.append(
+            "Foram observados possíveis sinais de postura retraída, tratados apenas como evidência complementar e exploratória."
         )
 
     return {
         "posture_flags": posture_flags,
-        "posture_score": posture_score,
+        "posture_score": 0.0,
         "posture_interpretation": posture_interpretation
     }
-
 
 def analyze_video(video_path: str) -> dict:
     load_dotenv()
@@ -173,9 +180,8 @@ def analyze_video(video_path: str) -> dict:
     emotions_detected = []
     emotion_confidences = []
 
-    posture_flags_detected = []
-    posture_scores = []
-    posture_interpretations = []
+    posture_flags_raw = []
+    posture_interpretations_raw = []
 
     while True:
         ret, frame = cap.read()
@@ -209,16 +215,13 @@ def analyze_video(video_path: str) -> dict:
 
             posture_result = analyze_body_posture(frame, pose_model)
 
-            if posture_result["posture_flags"]:
+            if posture_result.get("posture_flags"):
                 frames_with_pose += 1
-                posture_flags_detected.extend(
-                    posture_result["posture_flags"]
+                posture_flags_raw.extend(
+                    posture_result.get("posture_flags", [])
                 )
-                posture_scores.append(
-                    posture_result["posture_score"]
-                )
-                posture_interpretations.extend(
-                    posture_result["posture_interpretation"]
+                posture_interpretations_raw.extend(
+                    posture_result.get("posture_interpretation", [])
                 )
 
             success, encoded_image = cv2.imencode(".jpg", frame)
@@ -250,7 +253,9 @@ def analyze_video(video_path: str) -> dict:
 
                                 if confidence >= 50:
                                     emotions_detected.append(emotion_type)
-                                    emotion_confidences.append(round(confidence, 2))
+                                    emotion_confidences.append(
+                                        round(confidence, 2)
+                                    )
 
                                 negative_emotions = {
                                     "SAD",
@@ -298,16 +303,6 @@ def analyze_video(video_path: str) -> dict:
         if emotions_detected[i] != emotions_detected[i - 1]:
             emotion_transitions += 1
 
-    posture_flags_detected = list(dict.fromkeys(posture_flags_detected))
-
-    posture_score = (
-        round(sum(posture_scores) / len(posture_scores), 2)
-        if posture_scores
-        else 0.0
-    )
-
-    posture_interpretations = list(dict.fromkeys(posture_interpretations))
-
     emotion_weights = {
         "FEAR": 0.8,
         "SAD": 0.6,
@@ -328,6 +323,30 @@ def analyze_video(video_path: str) -> dict:
         video_score = sum(scores) / len(scores)
     else:
         video_score = 0
+
+    posture_count = Counter(posture_flags_raw)
+
+    posture_flags_detected = []
+
+    if posture_count.get("possible_retracted_posture", 0) >= 4:
+        posture_flags_detected.append("possible_retracted_posture")
+
+    if posture_count.get("possible_body_tension", 0) >= 4:
+        posture_flags_detected.append("possible_body_tension")
+
+    posture_interpretations = []
+
+    if "possible_body_tension" in posture_flags_detected:
+        posture_interpretations.append(
+            "Foram observados possíveis sinais posturais persistentes de tensão corporal, tratados apenas como evidência complementar e exploratória."
+        )
+
+    if "possible_retracted_posture" in posture_flags_detected:
+        posture_interpretations.append(
+            "Foram observados possíveis sinais persistentes de postura retraída, tratados apenas como evidência complementar e exploratória."
+        )
+
+    posture_score = 0.0
 
     flags = []
 
@@ -373,13 +392,8 @@ def analyze_video(video_path: str) -> dict:
         flags.append("emotional_variation_detected")
         video_score += 0.05
 
-    if "possible_retracted_posture" in posture_flags_detected:
-        flags.append("possible_retracted_posture")
-        video_score += posture_score
-
-    if "possible_body_tension" in posture_flags_detected:
-        flags.append("possible_body_tension")
-        video_score += posture_score
+    for posture_flag in posture_flags_detected:
+        flags.append(posture_flag)
 
     if faces_detected == 0:
         video_score = 0
@@ -410,6 +424,18 @@ def analyze_video(video_path: str) -> dict:
     if faces_detected > 0:
         visual_interpretation.append(
             "Foram detectadas faces no vídeo, permitindo análise de expressões emocionais aparentes."
+        )
+
+    if emotion_percentages:
+        emotions_text = ", ".join(
+            [
+                f"{emotion}: {percentage}%"
+                for emotion, percentage in emotion_percentages.items()
+            ]
+        )
+
+        visual_interpretation.append(
+            f"A distribuição percentual das emoções aparentes consideradas na análise foi: {emotions_text}."
         )
 
     if "persistent_fear" in flags:
@@ -467,7 +493,7 @@ def analyze_video(video_path: str) -> dict:
         "A análise facial indica apenas expressões aparentes, não estado psicológico real.",
         "O sistema não realiza diagnóstico médico ou psicológico.",
         "Os sinais visuais devem ser interpretados apenas como apoio à triagem.",
-        "A análise de postura corporal é complementar e não possui valor diagnóstico isolado.",
+        "A análise de postura corporal é complementar, exploratória e não possui valor diagnóstico isolado.",
         "Iluminação, ângulo da câmera, qualidade do vídeo e oclusões podem afetar os resultados.",
         "O YOLOv8 utilizado detecta presença humana e postura corporal aparente, mas não substitui avaliação clínica especializada.",
         "Em vídeos curtos ou bases sintéticas como RAVDESS, a emoção pode variar rapidamente e a análise depende dos frames amostrados."
@@ -496,6 +522,7 @@ def analyze_video(video_path: str) -> dict:
             "emotion_percentages": emotion_percentages,
             "emotion_transitions": emotion_transitions,
             "emotion_confidences": emotion_confidences,
+            "posture_raw_counts": dict(posture_count),
             "cloud_service": "AWS Rekognition",
             "visual_model": "YOLOv8",
             "pose_model": "YOLOv8 Pose",

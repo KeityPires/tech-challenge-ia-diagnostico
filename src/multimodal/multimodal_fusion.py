@@ -18,7 +18,7 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
     has_audio = audio_level != "not_provided" and audio_score > 0
     has_posture = posture_score > 0 or bool(posture_flags)
 
-    adjusted_video_score = min(video_score + posture_score, 1.0)
+    adjusted_video_score = video_score
 
     if has_video and has_audio:
         final_score = (0.4 * adjusted_video_score) + (0.6 * audio_score)
