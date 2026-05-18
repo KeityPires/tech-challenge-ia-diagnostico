@@ -1,27 +1,34 @@
 def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
     video_score = float(video_result.get("risk_score", 0) or 0)
     audio_score = float(audio_result.get("risk_score", 0) or 0)
+    posture_score = float(video_result.get("posture_score", 0) or 0)
 
     video_level = video_result.get("risk_level", "not_provided")
     audio_level = audio_result.get("risk_level", "not_provided")
 
     video_flags = video_result.get("flags", []) or []
+    posture_flags = video_result.get("posture_flags", []) or []
     audio_flags = audio_result.get("flags", []) or []
 
-    evidences = list(dict.fromkeys(video_flags + audio_flags))
+    posture_interpretation = video_result.get("posture_interpretation", []) or []
+
+    evidences = list(dict.fromkeys(video_flags + posture_flags + audio_flags))
 
     has_video = video_level != "not_provided" and video_score > 0
     has_audio = audio_level != "not_provided" and audio_score > 0
+    has_posture = posture_score > 0 or bool(posture_flags)
+
+    adjusted_video_score = min(video_score + posture_score, 1.0)
 
     if has_video and has_audio:
-        final_score = (0.4 * video_score) + (0.6 * audio_score)
-        fusion_strategy = "audio_60_video_40"
+        final_score = (0.4 * adjusted_video_score) + (0.6 * audio_score)
+        fusion_strategy = "audio_60_video_40_with_posture"
     elif has_audio:
         final_score = audio_score
         fusion_strategy = "audio_only"
-    elif has_video:
-        final_score = video_score
-        fusion_strategy = "video_only"
+    elif has_video or has_posture:
+        final_score = adjusted_video_score
+        fusion_strategy = "video_only_with_posture"
     else:
         final_score = 0
         fusion_strategy = "no_multimodal_data"
@@ -38,6 +45,8 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         "persistent_tension",
         "persistent_confusion",
         "emotional_variation_detected",
+        "possible_retracted_posture",
+        "possible_body_tension",
         "ansiosa",
         "agitada",
         "cansada",
@@ -87,7 +96,7 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
 
     interpretation = []
 
-    if not has_video and not has_audio:
+    if not has_video and not has_audio and not has_posture:
         interpretation.append(
             "Não foram fornecidos dados multimodais suficientes para avaliação."
         )
@@ -105,10 +114,6 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
             interpretation.append(
                 "A análise de áudio apresentou baixo nível de risco. Os sinais acústicos detectados foram considerados fracos e complementares, sem evidência textual clínica de alerta."
             )
-        else:
-            interpretation.append(
-                "A análise de áudio não apresentou sinais relevantes de risco."
-            )
 
     if has_video:
         if video_score >= 0.6:
@@ -123,10 +128,14 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
             interpretation.append(
                 "A análise de vídeo apresentou baixo nível de risco visual."
             )
-        else:
-            interpretation.append(
-                "A análise de vídeo não apresentou sinais visuais relevantes de risco."
-            )
+
+    if has_posture:
+        interpretation.append(
+            "A análise de postura corporal identificou sinais não verbais complementares, tratados com baixa ponderação e sem valor diagnóstico isolado."
+        )
+
+    if posture_interpretation:
+        interpretation.extend(posture_interpretation)
 
     if risk_level != "baixo":
         if "fear_expression" in evidences:
@@ -149,6 +158,16 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
                 "Foram observadas expressões aparentes associadas a confusão ou insegurança."
             )
 
+        if "possible_retracted_posture" in evidences:
+            interpretation.append(
+                "Foram observados possíveis sinais de postura retraída, usados apenas como evidência complementar."
+            )
+
+        if "possible_body_tension" in evidences:
+            interpretation.append(
+                "Foram observados possíveis sinais de tensão corporal, usados apenas como evidência complementar."
+            )
+
         if "ansiosa" in evidences or "agitada" in evidences:
             interpretation.append(
                 "O áudio indicou sinais compatíveis com ansiedade ou agitação."
@@ -159,7 +178,7 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
                 "O áudio indicou sinais compatíveis com cansaço ou fadiga."
             )
 
-    recommendation = ""
+    interpretation = list(dict.fromkeys(interpretation))
 
     if risk_level == "alto":
         recommendation = (
@@ -189,6 +208,8 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
         "display_evidences": display_evidences,
         "relevant_signals": relevant_signals,
         "video_score": video_score,
+        "posture_score": posture_score,
+        "adjusted_video_score": round(adjusted_video_score, 2),
         "audio_score": audio_score,
         "video_risk_level": video_level,
         "audio_risk_level": audio_level,
@@ -199,7 +220,8 @@ def calculate_multimodal_risk(video_result: dict, audio_result: dict) -> dict:
             "A análise multimodal é apenas apoio à triagem clínica.",
             "O sistema não realiza diagnóstico médico, psicológico ou psiquiátrico.",
             "Expressões faciais indicam apenas emoções aparentes.",
-            "Sinais de áudio e vídeo devem ser interpretados como evidências complementares.",
+            "Sinais de postura corporal indicam apenas padrões não verbais aparentes.",
+            "Sinais de áudio, vídeo e postura devem ser interpretados como evidências complementares.",
             "A confirmação clínica depende de avaliação profissional."
         ]
     }

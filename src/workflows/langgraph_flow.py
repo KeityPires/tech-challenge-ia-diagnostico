@@ -1,6 +1,9 @@
 from typing import TypedDict, List, Dict, Any, Optional
 import sqlite3
+import os
+import boto3
 
+from dotenv import load_dotenv
 from langgraph.graph import StateGraph, END
 
 from src.security.guardrails import evaluate_question_risk, build_guardrail_response
@@ -12,10 +15,6 @@ from src.multimodal.audio_processor import analyze_audio
 from src.multimodal.multimodal_fusion import calculate_multimodal_risk
 from src.multimodal.alert_generator import generate_alert
 
-import os
-import boto3
-from dotenv import load_dotenv
-
 
 class AssistantState(TypedDict, total=False):
     question: str
@@ -26,7 +25,6 @@ class AssistantState(TypedDict, total=False):
     docs: List[Any]
     context: str
 
-    # novos campos
     patient_id: Optional[str]
     patient_context: str
     final_context: str
@@ -34,8 +32,7 @@ class AssistantState(TypedDict, total=False):
     answer: str
     sources: List[Dict[str, Any]]
     status: str
-    
-    # novos campos - fase 4
+
     video_path: Optional[str]
     audio_path: Optional[str]
 
@@ -44,9 +41,9 @@ class AssistantState(TypedDict, total=False):
     multimodal_result: Dict[str, Any]
     multimodal_context: str
 
-    # fase 4 cloud
     audio_s3_key: Optional[str]
     video_s3_key: Optional[str]
+    audio_language: Optional[str]
 
 
 def guardrails_node(state: AssistantState) -> AssistantState:
@@ -90,7 +87,6 @@ def patient_context_node(
 ) -> AssistantState:
     patient_id = state.get("patient_id")
 
-    # Se não vier patient_id, o fluxo continua normalmente
     if not patient_id:
         state["patient_context"] = "No patient data was provided."
         return state
@@ -133,7 +129,9 @@ def patient_context_node(
         conn.close()
 
         if not patient:
-            state["patient_context"] = f"Patient {patient_id} was not found in the structured database."
+            state["patient_context"] = (
+                f"Patient {patient_id} was not found in the structured database."
+            )
             return state
 
         encounters_text = "\n".join(
@@ -164,9 +162,12 @@ Recent exams:
 """.strip()
 
     except Exception as e:
-        state["patient_context"] = f"Structured patient data could not be retrieved: {str(e)}"
+        state["patient_context"] = (
+            f"Structured patient data could not be retrieved: {str(e)}"
+        )
 
     return state
+
 
 def cloud_storage_node(state: AssistantState) -> AssistantState:
     load_dotenv()
@@ -174,12 +175,15 @@ def cloud_storage_node(state: AssistantState) -> AssistantState:
     bucket = os.getenv("AWS_S3_BUCKET")
     region = os.getenv("AWS_REGION")
 
+    audio_s3_key = state.get("audio_s3_key")
+    video_s3_key = state.get("video_s3_key")
+
+    if not audio_s3_key and not video_s3_key:
+        return state
+
     s3 = boto3.client("s3", region_name=region)
 
     os.makedirs("temp", exist_ok=True)
-
-    audio_s3_key = state.get("audio_s3_key")
-    video_s3_key = state.get("video_s3_key")
 
     if audio_s3_key:
         local_audio_path = os.path.join("temp", os.path.basename(audio_s3_key))
@@ -193,6 +197,7 @@ def cloud_storage_node(state: AssistantState) -> AssistantState:
 
     return state
 
+
 def video_analysis_node(state: AssistantState) -> AssistantState:
     video_path = state.get("video_path")
 
@@ -202,6 +207,9 @@ def video_analysis_node(state: AssistantState) -> AssistantState:
             "risk_score": 0,
             "risk_level": "not_provided",
             "flags": [],
+            "posture_score": 0.0,
+            "posture_flags": [],
+            "posture_interpretation": [],
             "metadata": {}
         }
         return state
@@ -222,12 +230,14 @@ def audio_analysis_node(state: AssistantState) -> AssistantState:
             "transcription": ""
         }
         return state
+
     language = state.get("audio_language", "pt-BR")
 
     state["audio_result"] = analyze_audio(
         audio_path,
         language=language
     )
+
     return state
 
 
@@ -242,55 +252,80 @@ def multimodal_fusion_node(state: AssistantState) -> AssistantState:
 
     alert_text = generate_alert(multimodal_result)
 
-    multimodal_result.get("display_evidences", [])
     interpretations = multimodal_result.get("interpretation", [])
     limitations = multimodal_result.get("limitations", [])
     relevant_signals = multimodal_result.get("relevant_signals", [])
     evidences = multimodal_result.get("display_evidences", [])
 
+    posture_flags = video_result.get("posture_flags", []) or []
+    posture_interpretation = video_result.get("posture_interpretation", []) or []
+    video_metadata = video_result.get("metadata", {}) or {}
+
     state["multimodal_result"] = multimodal_result
 
     state["multimodal_context"] = f"""
-    ANÁLISE MULTIMODAL:
+ANÁLISE MULTIMODAL:
 
-    Score de risco do vídeo:
-    {multimodal_result.get("video_score")}
+Score de risco do vídeo:
+{multimodal_result.get("video_score")}
 
-    Score de risco do áudio:
-    {multimodal_result.get("audio_score")}
+Score complementar de postura:
+{multimodal_result.get("posture_score", 0)}
 
-    Score multimodal final:
-    {multimodal_result.get("final_score")}
+Score de vídeo ajustado com postura:
+{multimodal_result.get("adjusted_video_score", multimodal_result.get("video_score"))}
 
-    Nível de risco:
-    {multimodal_result.get("risk_level")}
+Score de risco do áudio:
+{multimodal_result.get("audio_score")}
 
-    Alerta gerado:
-    {multimodal_result.get("alert")}
+Score multimodal final:
+{multimodal_result.get("final_score")}
 
-    Estratégia de fusão:
-    {multimodal_result.get("fusion_strategy")}
+Nível de risco:
+{multimodal_result.get("risk_level")}
 
-    Sinais relevantes identificados:
-    {chr(10).join(["- " + item for item in relevant_signals]) if relevant_signals else "- Nenhum sinal relevante identificado."}
+Alerta gerado:
+{multimodal_result.get("alert")}
 
-    Evidências multimodais:
-    {chr(10).join(["- " + item for item in evidences]) if evidences else "- Nenhuma evidência encontrada."}
+Estratégia de fusão:
+{multimodal_result.get("fusion_strategy")}
 
-    Interpretação clínica educacional:
-    {chr(10).join(["- " + item for item in interpretations]) if interpretations else "- Sem interpretação disponível."}
+Sinais relevantes identificados:
+{chr(10).join(["- " + item for item in relevant_signals]) if relevant_signals else "- Nenhum sinal relevante identificado."}
 
-    Recomendação:
-    {multimodal_result.get("recommendation")}
+Evidências multimodais:
+{chr(10).join(["- " + item for item in evidences]) if evidences else "- Nenhuma evidência encontrada."}
 
-    Limitações da análise:
-    {chr(10).join(["- " + item for item in limitations]) if limitations else "- Sem limitações registradas."}
+Sinais corporais identificados:
+{chr(10).join(["- " + item for item in posture_flags]) if posture_flags else "- Nenhum sinal corporal identificado."}
 
-    Mensagem automática de alerta:
-    {alert_text}
-    """.strip()
+Interpretação corporal:
+{chr(10).join(["- " + item for item in posture_interpretation]) if posture_interpretation else "- Nenhuma interpretação corporal disponível."}
+
+Frames analisados:
+{video_metadata.get("frames_analyzed", "não informado")}
+
+Frames com face detectada:
+{video_metadata.get("frames_with_faces", "não informado")}
+
+Frames com pose detectada:
+{video_metadata.get("frames_with_pose", "não informado")}
+
+Interpretação clínica educacional:
+{chr(10).join(["- " + item for item in interpretations]) if interpretations else "- Sem interpretação disponível."}
+
+Recomendação:
+{multimodal_result.get("recommendation")}
+
+Limitações da análise:
+{chr(10).join(["- " + item for item in limitations]) if limitations else "- Sem limitações registradas."}
+
+Mensagem automática de alerta:
+{alert_text}
+""".strip()
 
     return state
+
 
 def merge_context_node(state: AssistantState) -> AssistantState:
     patient_context = state.get("patient_context", "")
@@ -313,37 +348,57 @@ MEDICAL KNOWLEDGE RETRIEVED:
 
 def generate_node(state: AssistantState, llm) -> AssistantState:
     prompt = f"""
-    Você é um assistente educacional de apoio à triagem clínica em saúde da mulher.
+Você é um assistente educacional de apoio à triagem clínica preventiva em saúde da mulher.
 
-    Responda sempre em português do Brasil.
+IMPORTANTE:
+- Responda sempre em português do Brasil.
+- Nunca realize diagnóstico médico.
+- Nunca realize diagnóstico psicológico ou psiquiátrico.
+- Nunca afirme doenças, transtornos ou condições clínicas.
+- Nunca utilize linguagem alarmista.
+- Utilize linguagem cautelosa, técnica e ética.
+- Emoções detectadas representam apenas sinais aparentes.
+- Sinais de áudio, vídeo e postura corporal são evidências complementares.
+- A análise multimodal possui finalidade exclusivamente preventiva e educacional.
 
-    Use somente o contexto abaixo para responder.
-    Não invente informações.
-    Não forneça diagnóstico definitivo.
-    Não prescreva tratamento.
-    Não prescreva dosagem.
-    A análise multimodal deve ser usada apenas como apoio à triagem, nunca como confirmação clínica.
+OBJETIVO:
+Gerar uma interpretação multimodal clara, coerente e técnica baseada exclusivamente no contexto fornecido.
 
-    Organize a resposta obrigatoriamente neste formato:
+INSTRUÇÕES:
+- Explique a coerência entre áudio, vídeo e postura corporal.
+- Diferencie sinais fortes de sinais fracos.
+- Explique quando os sinais são apenas complementares.
+- Não repita informações desnecessariamente.
+- Quando houver postura corporal, explique que ela possui baixa ponderação.
+- Quando houver sinais leves, deixe claro que não indicam sofrimento relevante isoladamente.
+- Quando houver sinais persistentes multimodais, explique que existe maior consistência entre as modalidades.
+- Não use linguagem sensacionalista.
+- Não invente sinais que não estejam no contexto.
+- Não transforme sinais acústicos fracos em achados clínicos.
+- Não transforme postura corporal em diagnóstico ou conclusão psicológica.
 
-    1. Resumo da avaliação
-    2. Evidências observadas
-    3. Nível de risco
-    4. Recomendação
-    5. Limitações da análise
+ORGANIZE A RESPOSTA EXATAMENTE NESTE FORMATO:
 
-    Na seção de limitações, deixe claro que:
-    - o sistema não realiza diagnóstico;
-    - expressões faciais indicam apenas sinais aparentes;
-    - sinais de áudio e vídeo são evidências complementares;
-    - a avaliação profissional é necessária em caso de persistência ou agravamento dos sintomas.
+1. Resumo da avaliação
+2. Evidências observadas
+3. Integração multimodal
+4. Nível de risco
+5. Recomendação
+6. Limitações da análise
 
-    Contexto:
-    {state.get("final_context", state.get("context", ""))}
+NA SEÇÃO "LIMITAÇÕES", deixe explícito que:
+- o sistema não realiza diagnóstico;
+- emoções faciais representam apenas estados aparentes;
+- postura corporal não possui valor diagnóstico isolado;
+- sinais acústicos são complementares;
+- a avaliação profissional é necessária em caso de persistência ou agravamento.
 
-    Pergunta:
-    {state["question"]}
-    """
+CONTEXTO:
+{state.get("final_context", state.get("context", ""))}
+
+PERGUNTA:
+{state["question"]}
+""".strip()
 
     response = llm.invoke(prompt)
     answer = response.content if hasattr(response, "content") else str(response)
@@ -362,7 +417,7 @@ def generate_node(state: AssistantState, llm) -> AssistantState:
 
 
 def format_node(state: AssistantState) -> AssistantState:
-    sources = format_sources(state["docs"])
+    sources = format_sources(state.get("docs", []))
     state["sources"] = sources
     return state
 
@@ -379,7 +434,11 @@ def log_node(state: AssistantState) -> AssistantState:
     return state
 
 
-def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_demo.db"):
+def build_medical_assistant_graph(
+    llm,
+    retriever,
+    db_path: str = "data/medical_demo.db"
+):
     graph = StateGraph(AssistantState)
 
     graph.add_node("guardrails", guardrails_node)
@@ -393,7 +452,6 @@ def build_medical_assistant_graph(llm, retriever, db_path: str = "data/medical_d
     graph.add_node("generate", lambda state: generate_node(state, llm))
     graph.add_node("format", format_node)
     graph.add_node("log", log_node)
-    
 
     graph.set_entry_point("guardrails")
 
