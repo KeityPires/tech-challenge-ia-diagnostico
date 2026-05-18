@@ -40,6 +40,84 @@ def extract_video_metadata(video_path: str) -> dict:
     }
 
 
+def analyze_body_posture(frame, pose_model) -> dict:
+   
+    posture_flags = []
+    posture_score = 0.0
+    posture_interpretation = []
+
+    try:
+        results = pose_model(frame, verbose=False)
+
+        for r in results:
+            if r.keypoints is None:
+                continue
+
+            keypoints = r.keypoints.xy.cpu().numpy()
+
+            for person in keypoints:
+                try:
+                    left_shoulder = person[5]
+                    right_shoulder = person[6]
+                    left_hip = person[11]
+                    right_hip = person[12]
+
+                    shoulder_center_y = (
+                        left_shoulder[1] + right_shoulder[1]
+                    ) / 2
+
+                    hip_center_y = (
+                        left_hip[1] + right_hip[1]
+                    ) / 2
+
+                    torso_height = abs(
+                        shoulder_center_y - hip_center_y
+                    )
+
+                    shoulder_difference = abs(
+                        left_shoulder[1] - right_shoulder[1]
+                    )
+
+                    if torso_height < 80:
+                        posture_flags.append("possible_retracted_posture")
+                        posture_score += 0.08
+
+                    if shoulder_difference > 40:
+                        posture_flags.append("possible_body_tension")
+                        posture_score += 0.06
+
+                except Exception:
+                    continue
+
+    except Exception:
+        return {
+            "posture_flags": [],
+            "posture_score": 0.0,
+            "posture_interpretation": [
+                "Não foi possível realizar análise de postura corporal neste frame."
+            ]
+        }
+
+    posture_flags = list(dict.fromkeys(posture_flags))
+    posture_score = round(min(posture_score, 0.15), 2)
+
+    if "possible_retracted_posture" in posture_flags:
+        posture_interpretation.append(
+            "Foram observados possíveis sinais de postura retraída ou curvada, tratados apenas como evidência complementar."
+        )
+
+    if "possible_body_tension" in posture_flags:
+        posture_interpretation.append(
+            "Foram observados possíveis sinais de tensão corporal, tratados apenas como evidência complementar."
+        )
+
+    return {
+        "posture_flags": posture_flags,
+        "posture_score": posture_score,
+        "posture_interpretation": posture_interpretation
+    }
+
+
 def analyze_video(video_path: str) -> dict:
     load_dotenv()
 
@@ -53,6 +131,7 @@ def analyze_video(video_path: str) -> dict:
     )
 
     yolo_model = YOLO("yolov8n.pt")
+    pose_model = YOLO("yolov8n-pose.pt")
 
     cap = cv2.VideoCapture(video_path)
 
@@ -62,6 +141,9 @@ def analyze_video(video_path: str) -> dict:
             "risk_score": 0,
             "risk_level": "not_provided",
             "flags": ["video_not_opened"],
+            "posture_score": 0.0,
+            "posture_flags": [],
+            "posture_interpretation": [],
             "interpretation": [
                 "Não foi possível abrir o vídeo para análise."
             ],
@@ -73,7 +155,6 @@ def analyze_video(video_path: str) -> dict:
 
     fps = int(cap.get(cv2.CAP_PROP_FPS)) or 30
 
-    # Para vídeos curtos, como RAVDESS, analisamos frames com maior frequência.
     sample_interval_seconds = 0.5
     step = max(1, int(fps * sample_interval_seconds))
 
@@ -82,6 +163,7 @@ def analyze_video(video_path: str) -> dict:
     frame_id = 0
     frames_analyzed = 0
     frames_with_faces = 0
+    frames_with_pose = 0
 
     person_detected = False
     total_person_detections = 0
@@ -90,6 +172,10 @@ def analyze_video(video_path: str) -> dict:
     faces_detected = 0
     emotions_detected = []
     emotion_confidences = []
+
+    posture_flags_detected = []
+    posture_scores = []
+    posture_interpretations = []
 
     while True:
         ret, frame = cap.read()
@@ -104,7 +190,6 @@ def analyze_video(video_path: str) -> dict:
             frames_analyzed += 1
             people_in_frame = 0
 
-            # YOLOv8: detecção de presença humana.
             yolo_results = yolo_model(frame, verbose=False)
 
             for r in yolo_results:
@@ -122,7 +207,20 @@ def analyze_video(video_path: str) -> dict:
                 people_in_frame
             )
 
-            # AWS Rekognition: emoções faciais aparentes.
+            posture_result = analyze_body_posture(frame, pose_model)
+
+            if posture_result["posture_flags"]:
+                frames_with_pose += 1
+                posture_flags_detected.extend(
+                    posture_result["posture_flags"]
+                )
+                posture_scores.append(
+                    posture_result["posture_score"]
+                )
+                posture_interpretations.extend(
+                    posture_result["posture_interpretation"]
+                )
+
             success, encoded_image = cv2.imencode(".jpg", frame)
 
             if success:
@@ -150,12 +248,10 @@ def analyze_video(video_path: str) -> dict:
                                 emotion_type = dominant_emotion["Type"]
                                 confidence = dominant_emotion["Confidence"]
 
-                                # guarda emoção dominante
                                 if confidence >= 50:
                                     emotions_detected.append(emotion_type)
                                     emotion_confidences.append(round(confidence, 2))
 
-                                # guarda emoções negativas relevantes mesmo que não sejam dominantes
                                 negative_emotions = {
                                     "SAD",
                                     "FEAR",
@@ -168,9 +264,14 @@ def analyze_video(video_path: str) -> dict:
                                     emotion_type = emotion["Type"]
                                     confidence = emotion["Confidence"]
 
-                                    if emotion_type in negative_emotions and confidence >= 20:
+                                    if (
+                                        emotion_type in negative_emotions
+                                        and confidence >= 20
+                                    ):
                                         emotions_detected.append(emotion_type)
-                                        emotion_confidences.append(round(confidence, 2))
+                                        emotion_confidences.append(
+                                            round(confidence, 2)
+                                        )
 
                 except Exception:
                     emotions_detected.append("UNKNOWN")
@@ -196,6 +297,16 @@ def analyze_video(video_path: str) -> dict:
     for i in range(1, len(emotions_detected)):
         if emotions_detected[i] != emotions_detected[i - 1]:
             emotion_transitions += 1
+
+    posture_flags_detected = list(dict.fromkeys(posture_flags_detected))
+
+    posture_score = (
+        round(sum(posture_scores) / len(posture_scores), 2)
+        if posture_scores
+        else 0.0
+    )
+
+    posture_interpretations = list(dict.fromkeys(posture_interpretations))
 
     emotion_weights = {
         "FEAR": 0.8,
@@ -262,7 +373,14 @@ def analyze_video(video_path: str) -> dict:
         flags.append("emotional_variation_detected")
         video_score += 0.05
 
-    # Se não houve nenhuma face detectada, não atribuímos risco emocional visual.
+    if "possible_retracted_posture" in posture_flags_detected:
+        flags.append("possible_retracted_posture")
+        video_score += posture_score
+
+    if "possible_body_tension" in posture_flags_detected:
+        flags.append("possible_body_tension")
+        video_score += posture_score
+
     if faces_detected == 0:
         video_score = 0
 
@@ -324,6 +442,9 @@ def analyze_video(video_path: str) -> dict:
             "O vídeo apresentou múltiplas pessoas no mesmo frame, indicando maior complexidade contextual da cena."
         )
 
+    if posture_interpretations:
+        visual_interpretation.extend(posture_interpretations)
+
     if faces_detected > 0 and not any(
         flag in flags
         for flag in [
@@ -346,8 +467,9 @@ def analyze_video(video_path: str) -> dict:
         "A análise facial indica apenas expressões aparentes, não estado psicológico real.",
         "O sistema não realiza diagnóstico médico ou psicológico.",
         "Os sinais visuais devem ser interpretados apenas como apoio à triagem.",
+        "A análise de postura corporal é complementar e não possui valor diagnóstico isolado.",
         "Iluminação, ângulo da câmera, qualidade do vídeo e oclusões podem afetar os resultados.",
-        "O YOLOv8 utilizado detecta presença humana, mas não substitui avaliação clínica especializada.",
+        "O YOLOv8 utilizado detecta presença humana e postura corporal aparente, mas não substitui avaliação clínica especializada.",
         "Em vídeos curtos ou bases sintéticas como RAVDESS, a emoção pode variar rapidamente e a análise depende dos frames amostrados."
     ]
 
@@ -356,12 +478,16 @@ def analyze_video(video_path: str) -> dict:
         "risk_score": video_score,
         "risk_level": risk_level,
         "flags": list(dict.fromkeys(flags)),
+        "posture_score": posture_score,
+        "posture_flags": posture_flags_detected,
+        "posture_interpretation": posture_interpretations,
         "interpretation": visual_interpretation,
         "limitations": limitations,
         "metadata": {
             **metadata,
             "frames_analyzed": frames_analyzed,
             "frames_with_faces": frames_with_faces,
+            "frames_with_pose": frames_with_pose,
             "faces_detected": faces_detected,
             "person_detected": person_detected,
             "total_person_detections": total_person_detections,
@@ -372,6 +498,7 @@ def analyze_video(video_path: str) -> dict:
             "emotion_confidences": emotion_confidences,
             "cloud_service": "AWS Rekognition",
             "visual_model": "YOLOv8",
+            "pose_model": "YOLOv8 Pose",
             "analysis_strategy": "frame_sampling_every_0_5_seconds_max_20_frames"
         }
     }
